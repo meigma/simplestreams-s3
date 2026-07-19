@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/meigma/simplestreams-s3/internal/failure"
+	"github.com/meigma/simplestreams-s3/internal/proxy"
 )
 
 const unavailableReason = "s3_unavailable"
@@ -16,6 +17,7 @@ type Readiness struct {
 	interval  time.Duration
 	timeout   time.Duration
 	staleness time.Duration
+	metrics   proxy.Metrics
 
 	mu          sync.RWMutex
 	lastSuccess time.Time
@@ -30,7 +32,23 @@ func NewReadiness(
 	timeout time.Duration,
 	staleness time.Duration,
 ) *Readiness {
-	return &Readiness{probe: probe, interval: interval, timeout: timeout, staleness: staleness, reason: "starting"}
+	return NewReadinessWithMetrics(probe, interval, timeout, staleness, proxy.NoopMetrics())
+}
+
+// NewReadinessWithMetrics constructs a cached readiness checker with optional metric emission.
+func NewReadinessWithMetrics(
+	probe func(context.Context) error,
+	interval time.Duration,
+	timeout time.Duration,
+	staleness time.Duration,
+	metrics proxy.Metrics,
+) *Readiness {
+	if metrics == nil {
+		metrics = proxy.NoopMetrics()
+	}
+	return &Readiness{
+		probe: probe, interval: interval, timeout: timeout, staleness: staleness, metrics: metrics, reason: "starting",
+	}
 }
 
 // Start runs immediate and periodic catalog probes until ctx is canceled.
@@ -73,9 +91,10 @@ func (readiness *Readiness) SetDraining() {
 		return
 	}
 	readiness.mu.Lock()
-	defer readiness.mu.Unlock()
 	readiness.draining = true
 	readiness.reason = "draining"
+	readiness.mu.Unlock()
+	readiness.metrics.RecordReadiness(context.Background(), false, "draining")
 }
 
 // check runs one bounded probe and updates only cached state.
@@ -84,10 +103,11 @@ func (readiness *Readiness) check(parent context.Context) {
 	err := readiness.probe(ctx)
 	cancel()
 	readiness.mu.Lock()
-	defer readiness.mu.Unlock()
 	if err == nil {
 		readiness.lastSuccess = time.Now()
 		readiness.reason = ""
+		readiness.mu.Unlock()
+		readiness.metrics.RecordReadiness(parent, true, "")
 		return
 	}
 	switch failure.KindOf(err) {
@@ -110,4 +130,7 @@ func (readiness *Readiness) check(parent context.Context) {
 		failure.KindInternal:
 		readiness.reason = unavailableReason
 	}
+	reason := readiness.reason
+	readiness.mu.Unlock()
+	readiness.metrics.RecordReadiness(parent, false, reason)
 }

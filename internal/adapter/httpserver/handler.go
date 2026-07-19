@@ -99,12 +99,32 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	switch request.URL.Path {
 	case "/healthz":
 		if !healthMethod(writer, request, requestID) {
+			handler.record(
+				request,
+				requestID,
+				"health",
+				http.StatusMethodNotAllowed,
+				0,
+				"method_not_allowed",
+				false,
+				started,
+			)
 			return
 		}
 		handler.health(writer, request, requestID, started)
 		return
 	case "/readyz":
 		if !healthMethod(writer, request, requestID) {
+			handler.record(
+				request,
+				requestID,
+				"readiness",
+				http.StatusMethodNotAllowed,
+				0,
+				"method_not_allowed",
+				false,
+				started,
+			)
 			return
 		}
 		handler.readiness(writer, request, requestID, started)
@@ -116,6 +136,16 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	default:
 		writer.Header().Set("Allow", "GET, HEAD")
 		writeError(writer, request.Method, http.StatusMethodNotAllowed, "method_not_allowed", requestID)
+		handler.record(
+			request,
+			requestID,
+			"unmatched",
+			http.StatusMethodNotAllowed,
+			0,
+			"method_not_allowed",
+			false,
+			started,
+		)
 	}
 }
 
@@ -145,23 +175,13 @@ func (handler *Handler) readiness(
 		status = http.StatusOK
 		body = `{"status":"ready"}`
 	}
-	handler.metrics.RecordReadiness(request.Context(), ready, reason)
 	writer.WriteHeader(status)
+	bodySize := int64(0)
 	if request.Method != http.MethodHead {
-		_, _ = io.WriteString(writer, body)
+		written, _ := io.WriteString(writer, body)
+		bodySize = int64(written)
 	}
-	handler.logger.DebugContext(
-		request.Context(),
-		"request completed",
-		"request_id",
-		requestID,
-		"http.route",
-		"readiness",
-		"http.response.status_code",
-		status,
-		"duration_ms",
-		time.Since(started).Milliseconds(),
-	)
+	handler.record(request, requestID, "readiness", status, bodySize, "", false, started)
 }
 
 // health returns process-local liveness without contacting S3 or metrics.
@@ -174,21 +194,12 @@ func (handler *Handler) health(
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(http.StatusOK)
+	bodySize := int64(0)
 	if request.Method != http.MethodHead {
-		_, _ = io.WriteString(writer, `{"status":"ok"}`)
+		written, _ := io.WriteString(writer, `{"status":"ok"}`)
+		bodySize = int64(written)
 	}
-	handler.logger.DebugContext(
-		request.Context(),
-		"request completed",
-		"request_id",
-		requestID,
-		"http.route",
-		"health",
-		"http.response.status_code",
-		http.StatusOK,
-		"duration_ms",
-		time.Since(started).Milliseconds(),
-	)
+	handler.record(request, requestID, "health", http.StatusOK, bodySize, "", false, started)
 }
 
 // object applies the bounded HTTP-to-S3 read contract to one object request.
@@ -202,9 +213,9 @@ func (handler *Handler) object(
 	if err != nil {
 		writeError(writer, request.Method, http.StatusBadRequest, "invalid_input", requestID)
 		handler.record(
-			request.Context(),
+			request,
 			requestID,
-			request.Method,
+			"object",
 			http.StatusBadRequest,
 			0,
 			"invalid_input",
@@ -218,9 +229,9 @@ func (handler *Handler) object(
 		writeError(writer, request.Method, http.StatusServiceUnavailable, "stream_limit", requestID)
 		handler.metrics.RecordRejectedStream(request.Context())
 		handler.record(
-			request.Context(),
+			request,
 			requestID,
-			request.Method,
+			"object",
 			http.StatusServiceUnavailable,
 			0,
 			"unavailable",
@@ -255,7 +266,7 @@ func (handler *Handler) get(
 	result, err := handler.proxy.Get(streamContext, request.URL.EscapedPath(), readRequest)
 	if err != nil {
 		status, code := writeApplicationError(writer, request.Method, err, requestID)
-		handler.record(request.Context(), requestID, request.Method, status, 0, code, readRequest.Range != "", started)
+		handler.record(request, requestID, "object", status, 0, code, readRequest.Range != "", started)
 		return
 	}
 	defer result.Body.Close()
@@ -285,9 +296,9 @@ func (handler *Handler) get(
 			written,
 		)
 		handler.record(
-			request.Context(),
+			request,
 			requestID,
-			request.Method,
+			"object",
 			status,
 			written,
 			errorKind,
@@ -296,7 +307,7 @@ func (handler *Handler) get(
 		)
 		panic(http.ErrAbortHandler)
 	}
-	handler.record(request.Context(), requestID, request.Method, status, written, "", readRequest.Range != "", started)
+	handler.record(request, requestID, "object", status, written, "", readRequest.Range != "", started)
 }
 
 // copyStream applies independent upstream-read and downstream-write progress bounds.
@@ -437,7 +448,7 @@ func (handler *Handler) head(
 	attributes, err := handler.proxy.Head(request.Context(), request.URL.EscapedPath(), readRequest)
 	if err != nil {
 		status, code := writeApplicationError(writer, request.Method, err, requestID)
-		handler.record(request.Context(), requestID, request.Method, status, 0, code, readRequest.Range != "", started)
+		handler.record(request, requestID, "object", status, 0, code, readRequest.Range != "", started)
 		return
 	}
 	writeAttributes(writer.Header(), attributes)
@@ -446,7 +457,7 @@ func (handler *Handler) head(
 		status = http.StatusPartialContent
 	}
 	writer.WriteHeader(status)
-	handler.record(request.Context(), requestID, request.Method, status, 0, "", readRequest.Range != "", started)
+	handler.record(request, requestID, "object", status, 0, "", readRequest.Range != "", started)
 }
 
 // acquire reserves one S3-backed stream without queueing callers.
@@ -464,22 +475,30 @@ func (handler *Handler) release() { <-handler.streams }
 
 // record writes one low-cardinality completion record and its no-op metric emission.
 func (handler *Handler) record(
-	ctx context.Context,
+	request *http.Request,
 	requestID string,
-	method string,
+	route string,
 	status int,
 	bodySize int64,
 	errorKind string,
 	rangeRequested bool,
 	started time.Time,
 ) {
-	handler.metrics.RecordRequest(ctx, proxy.RequestMetric{
-		Method: method, Route: "object", StatusCode: status, BodySize: bodySize, ErrorKind: errorKind,
+	duration := time.Since(started)
+	handler.metrics.RecordRequest(request.Context(), proxy.RequestMetric{
+		Method:          request.Method,
+		Route:           route,
+		StatusCode:      status,
+		BodySize:        bodySize,
+		Duration:        duration,
+		Scheme:          requestScheme(request),
+		ProtocolVersion: strconv.Itoa(request.ProtoMajor) + "." + strconv.Itoa(request.ProtoMinor),
+		ErrorKind:       errorKind,
 	})
 	attributes := []slog.Attr{
 		slog.String("request_id", requestID),
-		slog.String("http.request.method", method),
-		slog.String("http.route", "object"),
+		slog.String("http.request.method", request.Method),
+		slog.String("http.route", route),
 		slog.Int("http.response.status_code", status),
 		slog.Int64("http.response.body.size", bodySize),
 		slog.Bool("range_requested", rangeRequested),
@@ -487,8 +506,20 @@ func (handler *Handler) record(
 	if errorKind != "" {
 		attributes = append(attributes, slog.String("error.kind", errorKind))
 	}
-	attributes = append(attributes, slog.Int64("duration_ms", time.Since(started).Milliseconds()))
-	handler.logger.LogAttrs(ctx, slog.LevelInfo, "request completed", attributes...)
+	attributes = append(attributes, slog.Int64("duration_ms", duration.Milliseconds()))
+	level := slog.LevelInfo
+	if route == "health" || route == "readiness" {
+		level = slog.LevelDebug
+	}
+	handler.logger.LogAttrs(request.Context(), level, "request completed", attributes...)
+}
+
+// requestScheme returns the bounded transport scheme used by standard HTTP metrics.
+func requestScheme(request *http.Request) string {
+	if request.TLS != nil {
+		return "https"
+	}
+	return "http"
 }
 
 // writeAttributes maps the fixed allowlist of S3 response properties.

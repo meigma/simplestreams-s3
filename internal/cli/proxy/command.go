@@ -55,6 +55,10 @@ func NewCommand(run Runner) *cobra.Command {
 	command.Flags().
 		Duration("readiness-staleness", config.DefaultProxyReadinessStaleness, "maximum age of successful readiness probe")
 	command.Flags().String("log-level", "info", "proxy JSON logging level")
+	command.Flags().String("metrics-endpoint", "", "OTLP/HTTP collector host and port")
+	command.Flags().Duration("metrics-interval", config.DefaultMetricsInterval, "OTLP metric export interval")
+	command.Flags().Duration("metrics-timeout", config.DefaultMetricsTimeout, "OTLP export and shutdown timeout")
+	command.Flags().Bool("metrics-insecure", false, "allow cleartext OTLP to a loopback collector")
 	return command
 }
 

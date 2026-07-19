@@ -57,6 +57,10 @@ const (
 	DefaultProxyReadinessTimeout = 2 * time.Second
 	// DefaultProxyReadinessStaleness is the longest age of a successful readiness probe.
 	DefaultProxyReadinessStaleness = 30 * time.Second
+	// DefaultMetricsInterval controls periodic OTLP metric export.
+	DefaultMetricsInterval = 30 * time.Second
+	// DefaultMetricsTimeout bounds each OTLP export and shutdown flush.
+	DefaultMetricsTimeout = 10 * time.Second
 )
 
 // S3 contains validated settings shared by publisher and proxy adapters.
@@ -129,6 +133,20 @@ type Proxy struct {
 	ReadinessStaleness time.Duration
 	// LogLevel selects the structured proxy logging threshold.
 	LogLevel string
+	// Metrics contains the optional OTLP/HTTP exporter settings.
+	Metrics Metrics
+}
+
+// Metrics contains validated optional OTLP/HTTP exporter settings.
+type Metrics struct {
+	// Endpoint is the collector host and port; empty disables metrics.
+	Endpoint string
+	// Interval controls periodic metric collection and export.
+	Interval time.Duration
+	// Timeout bounds one export and the shutdown flush.
+	Timeout time.Duration
+	// Insecure permits cleartext OTLP only for a loopback endpoint.
+	Insecure bool
 }
 
 // rawConfig is the strict YAML, flag, and environment decoding target.
@@ -137,6 +155,7 @@ type rawConfig struct {
 	Publish rawPublish `mapstructure:"publish"`
 	Proxy   rawProxy   `mapstructure:"proxy"`
 	Logging rawLogging `mapstructure:"logging"`
+	Metrics rawMetrics `mapstructure:"metrics"`
 }
 
 // rawS3 contains unvalidated S3 boundary values.
@@ -181,6 +200,14 @@ type rawProxy struct {
 // rawLogging contains unvalidated proxy logging boundary values.
 type rawLogging struct {
 	Level string `mapstructure:"level"`
+}
+
+// rawMetrics contains unvalidated OTLP exporter boundary values.
+type rawMetrics struct {
+	Endpoint string        `mapstructure:"endpoint"`
+	Interval time.Duration `mapstructure:"interval"`
+	Timeout  time.Duration `mapstructure:"timeout"`
+	Insecure bool          `mapstructure:"insecure"`
 }
 
 // binding maps one Viper key to one Cobra flag and stable environment variable.
@@ -234,13 +261,16 @@ func LoadPublish(command *cobra.Command, vp *viper.Viper) (Publish, error) {
 
 // LoadProxy resolves and validates the Phase 2 proxy configuration.
 func LoadProxy(command *cobra.Command, vp *viper.Viper) (Proxy, error) {
-	raw, err := load(command, vp, append(append(s3Bindings(), proxyBindings()...), loggingBindings()...))
-	if err != nil {
-		return Proxy{}, err
+	bindings := append(s3Bindings(), proxyBindings()...)
+	bindings = append(bindings, loggingBindings()...)
+	bindings = append(bindings, metricsBindings()...)
+	raw, loadErr := load(command, vp, bindings)
+	if loadErr != nil {
+		return Proxy{}, loadErr
 	}
-	s3Config, err := validateS3(raw.S3)
-	if err != nil {
-		return Proxy{}, err
+	s3Config, s3Err := validateS3(raw.S3)
+	if s3Err != nil {
+		return Proxy{}, s3Err
 	}
 	listen := strings.TrimSpace(raw.Proxy.Listen)
 	if listen == "" {
@@ -286,6 +316,10 @@ func LoadProxy(command *cobra.Command, vp *viper.Viper) (Proxy, error) {
 			"level must be debug, info, warn, or error",
 		)
 	}
+	metrics, metricsErr := validateMetrics(raw.Metrics)
+	if metricsErr != nil {
+		return Proxy{}, metricsErr
+	}
 	return Proxy{
 		S3:                  s3Config,
 		Listen:              listen,
@@ -301,6 +335,7 @@ func LoadProxy(command *cobra.Command, vp *viper.Viper) (Proxy, error) {
 		ReadinessTimeout:    raw.Proxy.ReadinessTimeout,
 		ReadinessStaleness:  raw.Proxy.ReadinessStaleness,
 		LogLevel:            level,
+		Metrics:             metrics,
 	}, nil
 }
 
@@ -399,6 +434,45 @@ func validatePositiveDuration(name string, value time.Duration) error {
 		return failure.New(failure.KindInvalidInput, "validate "+name, "duration must be positive")
 	}
 	return nil
+}
+
+// validateMetrics enforces bounded export and loopback-only cleartext transport.
+func validateMetrics(raw rawMetrics) (Metrics, error) {
+	if err := validatePositiveDuration("metrics.interval", raw.Interval); err != nil {
+		return Metrics{}, err
+	}
+	if err := validatePositiveDuration("metrics.timeout", raw.Timeout); err != nil {
+		return Metrics{}, err
+	}
+	endpoint := strings.TrimSpace(raw.Endpoint)
+	if endpoint == "" {
+		return Metrics{Interval: raw.Interval, Timeout: raw.Timeout, Insecure: raw.Insecure}, nil
+	}
+	host, port, err := net.SplitHostPort(endpoint)
+	if err != nil || host == "" || port == "" {
+		return Metrics{}, failure.New(
+			failure.KindInvalidInput,
+			"validate metrics.endpoint",
+			"endpoint must be a host:port without a scheme or path",
+		)
+	}
+	if raw.Insecure && !loopbackHost(host) {
+		return Metrics{}, failure.New(
+			failure.KindInvalidInput,
+			"validate metrics.insecure",
+			"cleartext OTLP requires a loopback endpoint",
+		)
+	}
+	return Metrics{Endpoint: endpoint, Interval: raw.Interval, Timeout: raw.Timeout, Insecure: raw.Insecure}, nil
+}
+
+// loopbackHost recognizes explicit local-development collector identities without DNS resolution.
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // s3Bindings returns the stable shared source mappings and normative defaults.
@@ -549,4 +623,24 @@ func proxyBindings() []binding {
 // loggingBindings returns source mappings for structured proxy logging.
 func loggingBindings() []binding {
 	return []binding{{key: "logging.level", flag: "log-level", env: "SIMPLESTREAMS_S3_LOG_LEVEL", defaultV: "info"}}
+}
+
+// metricsBindings returns the stable optional OTLP source mappings and normative defaults.
+func metricsBindings() []binding {
+	return []binding{
+		{key: "metrics.endpoint", flag: "metrics-endpoint", env: "SIMPLESTREAMS_S3_METRICS_ENDPOINT", defaultV: ""},
+		{
+			key:      "metrics.interval",
+			flag:     "metrics-interval",
+			env:      "SIMPLESTREAMS_S3_METRICS_INTERVAL",
+			defaultV: DefaultMetricsInterval,
+		},
+		{
+			key:      "metrics.timeout",
+			flag:     "metrics-timeout",
+			env:      "SIMPLESTREAMS_S3_METRICS_TIMEOUT",
+			defaultV: DefaultMetricsTimeout,
+		},
+		{key: "metrics.insecure", flag: "metrics-insecure", env: "SIMPLESTREAMS_S3_METRICS_INSECURE", defaultV: false},
+	}
 }

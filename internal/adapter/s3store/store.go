@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	smithymiddleware "github.com/aws/smithy-go/middleware"
 
 	"github.com/meigma/simplestreams-s3/internal/config"
 	"github.com/meigma/simplestreams-s3/internal/failure"
@@ -329,7 +330,12 @@ func (store *Store) Head(ctx context.Context, key object.ObjectKey, request prox
 	})
 	if err != nil {
 		classified := classify("head object", err)
-		store.metrics.RecordS3Request(ctx, "HeadObject", string(failure.KindOf(classified)), time.Since(started), 0)
+		store.metrics.RecordS3Request(ctx, proxy.S3Metric{
+			Operation: "HeadObject",
+			Outcome:   "error",
+			ErrorKind: string(failure.KindOf(classified)),
+			Duration:  time.Since(started),
+		})
 		return proxy.Attributes{}, classified
 	}
 	attributes := attributes(
@@ -344,7 +350,12 @@ func (store *Store) Head(ctx context.Context, key object.ObjectKey, request prox
 		output.ContentEncoding,
 		output.ExpiresString,
 	)
-	store.metrics.RecordS3Request(ctx, "HeadObject", "success", time.Since(started), 0)
+	store.metrics.RecordS3Request(ctx, proxy.S3Metric{
+		Operation: "HeadObject",
+		Outcome:   "success",
+		Duration:  time.Since(started),
+		Retries:   retryCount(output.ResultMetadata),
+	})
 	return attributes, nil
 }
 
@@ -363,7 +374,12 @@ func (store *Store) Get(ctx context.Context, key object.ObjectKey, request proxy
 	})
 	if err != nil {
 		classified := classify("get object", err)
-		store.metrics.RecordS3Request(ctx, "GetObject", string(failure.KindOf(classified)), time.Since(started), 0)
+		store.metrics.RecordS3Request(ctx, proxy.S3Metric{
+			Operation: "GetObject",
+			Outcome:   "error",
+			ErrorKind: string(failure.KindOf(classified)),
+			Duration:  time.Since(started),
+		})
 		return proxy.Object{}, classified
 	}
 	attributes := attributes(
@@ -378,11 +394,26 @@ func (store *Store) Get(ctx context.Context, key object.ObjectKey, request proxy
 		output.ContentEncoding,
 		output.ExpiresString,
 	)
-	store.metrics.RecordS3Request(ctx, "GetObject", "success", time.Since(started), attributes.Size.Int64())
+	store.metrics.RecordS3Request(ctx, proxy.S3Metric{
+		Operation:   "GetObject",
+		Outcome:     "success",
+		Duration:    time.Since(started),
+		Retries:     retryCount(output.ResultMetadata),
+		Transferred: attributes.Size.Int64(),
+	})
 	return proxy.Object{
 		Attributes: attributes,
 		Body:       output.Body,
 	}, nil
+}
+
+// retryCount extracts attempts after the first from successful AWS response metadata.
+func retryCount(metadata smithymiddleware.Metadata) int64 {
+	attempts, ok := awsretry.GetAttemptResults(metadata)
+	if !ok || len(attempts.Results) < 2 {
+		return 0
+	}
+	return int64(len(attempts.Results) - 1)
 }
 
 // attributes maps AWS output fields into the proxy port model.

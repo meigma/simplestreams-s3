@@ -48,6 +48,43 @@ type lockedBuffer struct {
 	buffer bytes.Buffer
 }
 
+// readinessMetric captures one cached readiness observation.
+type readinessMetric struct {
+	ready  bool
+	reason string
+}
+
+// recordingMetrics captures observable handler emission behavior without an exporter.
+type recordingMetrics struct {
+	requests  []proxy.RequestMetric
+	active    []int
+	readiness []readinessMetric
+}
+
+// RecordRequest captures one completed HTTP request.
+func (metrics *recordingMetrics) RecordRequest(_ context.Context, input proxy.RequestMetric) {
+	metrics.requests = append(metrics.requests, input)
+}
+
+// RecordRejectedStream accepts a local stream rejection.
+func (*recordingMetrics) RecordRejectedStream(context.Context) {}
+
+// RecordActiveStreams captures the current S3-backed stream count.
+func (metrics *recordingMetrics) RecordActiveStreams(_ context.Context, count int) {
+	metrics.active = append(metrics.active, count)
+}
+
+// RecordIncompleteStream accepts one interrupted stream.
+func (*recordingMetrics) RecordIncompleteStream(context.Context) {}
+
+// RecordReadiness captures one background cached-state observation.
+func (metrics *recordingMetrics) RecordReadiness(_ context.Context, ready bool, reason string) {
+	metrics.readiness = append(metrics.readiness, readinessMetric{ready: ready, reason: reason})
+}
+
+// RecordS3Request accepts one adapter operation observation.
+func (*recordingMetrics) RecordS3Request(context.Context, proxy.S3Metric) {}
+
 // Write appends one log fragment safely.
 func (buffer *lockedBuffer) Write(data []byte) (int, error) {
 	buffer.mu.Lock()
@@ -257,6 +294,46 @@ func TestHandlerRestrictsHealthRoutesToGETAndHEAD(t *testing.T) {
 			assert.Equal(t, "GET, HEAD", response.Header().Get("Allow"))
 		})
 	}
+}
+
+// TestHandlerEmitsStandardMetricsForEveryRouteClass proves bounded route coverage at the HTTP boundary.
+func TestHandlerEmitsStandardMetricsForEveryRouteClass(t *testing.T) {
+	metrics := new(recordingMetrics)
+	handler := NewHandlerWithOptions(proxy.NewService(&fakeHTTPReader{}, ""), Options{Metrics: metrics})
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/healthz", nil),
+		httptest.NewRequest(http.MethodGet, "/readyz", nil),
+		httptest.NewRequest(http.MethodGet, "/streams/v1/index.json", nil),
+		httptest.NewRequest(http.MethodPost, "/unsupported", nil),
+	} {
+		handler.ServeHTTP(httptest.NewRecorder(), request)
+	}
+	routes := make([]string, 0, len(metrics.requests))
+	for _, request := range metrics.requests {
+		routes = append(routes, request.Route)
+		assert.Positive(t, request.Duration)
+		assert.Equal(t, "http", request.Scheme)
+		assert.Equal(t, "1.1", request.ProtocolVersion)
+	}
+	assert.Equal(t, []string{"health", "readiness", "object", "unmatched"}, routes)
+	assert.Equal(t, []int{1, 0}, metrics.active)
+}
+
+// TestReadinessEmitsProbeResults proves metrics follow background S3 checks instead of endpoint traffic.
+func TestReadinessEmitsProbeResults(t *testing.T) {
+	metrics := new(recordingMetrics)
+	readiness := NewReadinessWithMetrics(
+		func(context.Context) error { return failure.New(failure.KindUnavailable, "probe", "unavailable") },
+		time.Hour,
+		time.Second,
+		time.Second,
+		metrics,
+	)
+	readiness.check(t.Context())
+
+	require.Len(t, metrics.readiness, 1)
+	assert.False(t, metrics.readiness[0].ready)
+	assert.Equal(t, "s3_unavailable", metrics.readiness[0].reason)
 }
 
 // TestHandlerRejectsSaturatedStreamsImmediately proves proxy requests never wait in an unbounded queue.

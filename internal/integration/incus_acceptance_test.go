@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -55,7 +56,16 @@ func TestIncusAcceptance(t *testing.T) {
 	certificate, err := tls.LoadX509KeyPair(certificatePath, keyPath)
 	require.NoError(t, err)
 	scenario := newMinIOScenario(t)
-	metadataPath, diskPath := testfixture.WriteSplitVM(t, t.TempDir(), testfixture.DefaultVMOptions())
+	options := testfixture.DefaultVMOptions()
+	switch runtime.GOARCH {
+	case "amd64":
+		options.Architecture = "x86_64"
+		options.PropertyArchitecture = "amd64"
+	case "arm64":
+	default:
+		t.Fatalf("Incus acceptance fixture does not support runner architecture %q", runtime.GOARCH)
+	}
+	metadataPath, diskPath := testfixture.WriteSplitVM(t, t.TempDir(), options)
 	vm, err := image.Inspect(metadataPath, diskPath)
 	require.NoError(t, err)
 	expectedFingerprint, err := vm.Fingerprint()

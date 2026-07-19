@@ -12,6 +12,7 @@ import (
 
 const (
 	drainingReason    = "draining"
+	startingReason    = "starting"
 	unavailableReason = "s3_unavailable"
 )
 
@@ -73,7 +74,7 @@ func NewReadinessWithObservers(
 	return &Readiness{
 		probe: probe, interval: interval, timeout: timeout, staleness: staleness,
 		metrics: metrics, logger: logger.With("component", "readiness"),
-		reason: "starting", transitionReason: "starting",
+		reason: startingReason, transitionReason: startingReason,
 	}
 }
 
@@ -98,7 +99,7 @@ func (readiness *Readiness) Start(ctx context.Context) {
 // Status returns the cached readiness state and only stable public reason codes.
 func (readiness *Readiness) Status(now time.Time) (bool, string) {
 	if readiness == nil {
-		return false, "starting"
+		return false, startingReason
 	}
 	readiness.mu.RLock()
 	defer readiness.mu.RUnlock()

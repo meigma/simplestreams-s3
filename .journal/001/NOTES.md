@@ -50,3 +50,9 @@ The design now fixes these v1 decisions:
 - declaration comments on every hand-written named type, function, and method, including unexported and test declarations.
 
 The final pass selected AWS's current `feature/s3/transfermanager`, added local SHA-256 verification plus S3 full-object CRC-64/NVME validation for mutable input safety, made the closed Incus CUE schema explicit, and bounded catalog operations, whole publishes, and stalled proxy streams. All document reference URLs returned HTTP 200, code fences are balanced, and `git diff --check` is clean. No implementation work has started; the first implementation step is the disposable Incus compatibility spike defined in the design.
+
+## 2026-07-18 22:12 — V1 implementation plan
+
+Created the companion plan at `.journal/001/PLAN.md`. It treats `DESIGN.md` as the sole requirements authority, prohibits implementation PRs from changing it, and requires a decision whenever implementation evidence exposes a conflict or ambiguity.
+
+The plan follows the design's five incremental-delivery boundaries exactly: a disposable Incus compatibility proof, a thin private-S3 vertical slice, safe repeat publication, production proxy behavior, and optional telemetry with final V1 acceptance. Phase 1 uses one draft PR that closes without merging spike code; each remaining phase is one ordered, mergeable PR with objective completion criteria. Independent reviews checked design traceability, PR scope, and the measurability of the success gates. `moon run root:check` passes. No implementation work has started.

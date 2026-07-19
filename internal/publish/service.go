@@ -260,6 +260,8 @@ func classifyCatalogRead(operation string, err error) error {
 		failure.KindContentConflict,
 		failure.KindCatalogConflict,
 		failure.KindPrecondition,
+		failure.KindNotModified,
+		failure.KindRangeNotSatisfiable,
 		failure.KindInternal:
 		return failure.Wrap(failure.KindCatalogConflict, operation, err)
 	}

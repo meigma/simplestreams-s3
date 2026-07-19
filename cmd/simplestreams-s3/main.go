@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -74,11 +75,41 @@ func publishImage(
 
 // serveProxy composes the AWS adapter, proxy service, and plain-HTTP server.
 func serveProxy(ctx context.Context, runtime config.Proxy) error {
-	store, err := s3store.New(ctx, runtime.S3, config.DefaultCatalogTimeout)
+	level := new(slog.LevelVar)
+	if err := level.UnmarshalText([]byte(runtime.LogLevel)); err != nil {
+		return err
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})).With(
+		"service.name", "simplestreams-s3",
+		"service.version", version,
+		"component", "proxy",
+	)
+	store, err := s3store.New(ctx, runtime.S3, runtime.ReadinessTimeout)
 	if err != nil {
 		return err
 	}
 	service := applicationproxy.NewService(store, runtime.S3.Prefix)
-	handler := httpserver.NewHandler(service)
-	return httpserver.NewServer(runtime.Listen, handler).Run(ctx)
+	readiness := httpserver.NewReadiness(
+		service.Probe,
+		runtime.ReadinessInterval,
+		runtime.ReadinessTimeout,
+		runtime.ReadinessStaleness,
+	)
+	handler := httpserver.NewHandlerWithOptions(service, httpserver.Options{
+		MaxStreams:          runtime.MaxStreams,
+		Logger:              logger,
+		Metrics:             applicationproxy.NoopMetrics(),
+		Readiness:           readiness,
+		UpstreamIdleTimeout: runtime.UpstreamIdleTimeout,
+		WriteIdleTimeout:    runtime.WriteIdleTimeout,
+	})
+	return httpserver.NewServerWithOptions(runtime.Listen, handler, httpserver.ServerOptions{
+		ReadHeaderTimeout: runtime.ReadHeaderTimeout,
+		IdleTimeout:       runtime.IdleTimeout,
+		MaxHeaderBytes:    runtime.MaxHeaderBytes,
+		ShutdownDelay:     runtime.ShutdownDelay,
+		ShutdownGrace:     runtime.ShutdownGrace,
+		Readiness:         readiness,
+		Logger:            logger,
+	}).Run(ctx)
 }

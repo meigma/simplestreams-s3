@@ -35,8 +35,8 @@ type Attributes struct {
 	ContentDisposition string
 	// ContentEncoding is the stored content encoding when present.
 	ContentEncoding string
-	// Expires is the stored HTTP expiry time when present.
-	Expires time.Time
+	// Expires is the stored HTTP expiry value when present.
+	Expires string
 }
 
 // Request describes one transport-neutral conditional object read.
@@ -94,6 +94,19 @@ func (service *Service) Get(ctx context.Context, escapedPath string, request Req
 		return Object{}, err
 	}
 	return service.reader.Get(ctx, key, request)
+}
+
+// Probe checks the fixed catalog index key through the authenticated object reader.
+func (service *Service) Probe(ctx context.Context) error {
+	if service == nil || service.reader == nil {
+		return failure.New(failure.KindInternal, "probe proxy readiness", "object reader is not configured")
+	}
+	key, err := object.NewObjectKey("streams/v1/index.json")
+	if err != nil {
+		return failure.Wrap(failure.KindInternal, "construct readiness index key", err)
+	}
+	_, err = service.reader.Head(ctx, service.prefix.Join(key), Request{})
+	return err
 }
 
 // key validates an escaped HTTP path without cleaning or rewriting it.

@@ -18,7 +18,13 @@ import (
 	"github.com/meigma/simplestreams-s3/internal/proxy"
 )
 
-const phaseTwoReadHeaderTimeout = 5 * time.Second
+const (
+	phaseTwoReadHeaderTimeout = 5 * time.Second
+	defaultMaxStreams         = 64
+	defaultMaxHeaderBytes     = 32768
+	defaultShutdownGrace      = 30 * time.Second
+	requestIDBytes            = 16
+)
 
 // Options configures the HTTP adapter's bounded production behavior.
 type Options struct {
@@ -28,14 +34,23 @@ type Options struct {
 	Logger *slog.Logger
 	// Metrics receives bounded request and stream emission points; nil discards them.
 	Metrics proxy.Metrics
+	// Readiness provides cached catalog state for the reserved readiness route.
+	Readiness *Readiness
+	// UpstreamIdleTimeout bounds time without upstream body-read progress.
+	UpstreamIdleTimeout time.Duration
+	// WriteIdleTimeout bounds time without downstream write progress.
+	WriteIdleTimeout time.Duration
 }
 
 // Handler serves exact Simple Streams object paths without content transformation.
 type Handler struct {
-	proxy   *proxy.Service
-	streams chan struct{}
-	logger  *slog.Logger
-	metrics proxy.Metrics
+	proxy               *proxy.Service
+	streams             chan struct{}
+	logger              *slog.Logger
+	metrics             proxy.Metrics
+	ready               *Readiness
+	upstreamIdleTimeout time.Duration
+	writeIdleTimeout    time.Duration
 }
 
 // errorBody is the intentionally small sanitized HTTP error document.
@@ -48,25 +63,28 @@ type errorBody struct {
 
 // NewHandler constructs an HTTP adapter with normative Phase 4 defaults.
 func NewHandler(service *proxy.Service) *Handler {
-	return NewHandlerWithOptions(service, Options{MaxStreams: 64})
+	return NewHandlerWithOptions(service, Options{MaxStreams: defaultMaxStreams})
 }
 
 // NewHandlerWithOptions constructs an HTTP adapter over the proxy application service.
 func NewHandlerWithOptions(service *proxy.Service, options Options) *Handler {
 	if options.MaxStreams < 1 {
-		options.MaxStreams = 64
+		options.MaxStreams = defaultMaxStreams
 	}
 	if options.Logger == nil {
-		options.Logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
+		options.Logger = slog.New(slog.DiscardHandler)
 	}
 	if options.Metrics == nil {
 		options.Metrics = proxy.NoopMetrics()
 	}
 	return &Handler{
-		proxy:   service,
-		streams: make(chan struct{}, options.MaxStreams),
-		logger:  options.Logger,
-		metrics: options.Metrics,
+		proxy:               service,
+		streams:             make(chan struct{}, options.MaxStreams),
+		logger:              options.Logger,
+		metrics:             options.Metrics,
+		ready:               options.Readiness,
+		upstreamIdleTimeout: options.UpstreamIdleTimeout,
+		writeIdleTimeout:    options.WriteIdleTimeout,
 	}
 }
 
@@ -79,7 +97,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		handler.health(writer, request, requestID)
 		return
 	case "/readyz":
-		writeError(writer, request.Method, http.StatusServiceUnavailable, "starting", requestID)
+		handler.readiness(writer, request, requestID)
 		return
 	}
 	switch request.Method {
@@ -91,6 +109,33 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	}
 }
 
+// readiness returns cached catalog availability without waiting for an S3 operation.
+func (handler *Handler) readiness(writer http.ResponseWriter, request *http.Request, requestID string) {
+	ready, reason := handler.ready.Status(time.Now())
+	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("Cache-Control", "no-store")
+	status := http.StatusServiceUnavailable
+	body := `{"status":"not_ready","reason":"` + reason + `"}`
+	if ready {
+		status = http.StatusOK
+		body = `{"status":"ready"}`
+	}
+	writer.WriteHeader(status)
+	if request.Method != http.MethodHead {
+		_, _ = io.WriteString(writer, body)
+	}
+	handler.logger.DebugContext(
+		request.Context(),
+		"request completed",
+		"request_id",
+		requestID,
+		"http.route",
+		"readiness",
+		"http.response.status_code",
+		status,
+	)
+}
+
 // health returns process-local liveness without contacting S3 or metrics.
 func (handler *Handler) health(writer http.ResponseWriter, request *http.Request, requestID string) {
 	writer.Header().Set("Content-Type", "application/json")
@@ -99,7 +144,16 @@ func (handler *Handler) health(writer http.ResponseWriter, request *http.Request
 	if request.Method != http.MethodHead {
 		_, _ = io.WriteString(writer, `{"status":"ok"}`)
 	}
-	handler.logger.Debug("request completed", "request_id", requestID, "http.route", "health", "http.response.status_code", http.StatusOK)
+	handler.logger.DebugContext(
+		request.Context(),
+		"request completed",
+		"request_id",
+		requestID,
+		"http.route",
+		"health",
+		"http.response.status_code",
+		http.StatusOK,
+	)
 }
 
 // object applies the bounded HTTP-to-S3 read contract to one object request.
@@ -114,7 +168,15 @@ func (handler *Handler) object(writer http.ResponseWriter, request *http.Request
 		writer.Header().Set("Retry-After", "1")
 		writeError(writer, request.Method, http.StatusServiceUnavailable, "stream_limit", requestID)
 		handler.metrics.RecordRejectedStream(request.Context())
-		handler.record(request.Context(), requestID, request.Method, http.StatusServiceUnavailable, 0, "unavailable", readRequest.Range != "")
+		handler.record(
+			request.Context(),
+			requestID,
+			request.Method,
+			http.StatusServiceUnavailable,
+			0,
+			"unavailable",
+			readRequest.Range != "",
+		)
 		return
 	}
 	defer handler.release()
@@ -133,7 +195,9 @@ func (handler *Handler) get(
 	requestID string,
 	readRequest proxy.Request,
 ) {
-	result, err := handler.proxy.Get(request.Context(), request.URL.EscapedPath(), readRequest)
+	streamContext, cancel := context.WithCancel(request.Context())
+	defer cancel()
+	result, err := handler.proxy.Get(streamContext, request.URL.EscapedPath(), readRequest)
 	if err != nil {
 		status, code := writeApplicationError(writer, request.Method, err, requestID)
 		handler.record(request.Context(), requestID, request.Method, status, 0, code, readRequest.Range != "")
@@ -146,14 +210,117 @@ func (handler *Handler) get(
 		status = http.StatusPartialContent
 	}
 	writer.WriteHeader(status)
-	written, copyErr := io.Copy(writer, result.Body)
+	written, copyErr := handler.copyStream(streamContext, cancel, writer, result.Body)
 	if copyErr != nil {
 		handler.metrics.RecordIncompleteStream(request.Context())
-		handler.logger.Warn("stream incomplete", "request_id", requestID, "error.kind", "unavailable", "http.response.body.size", written)
-		handler.record(request.Context(), requestID, request.Method, status, written, "unavailable", readRequest.Range != "")
+		errorKind := "unavailable"
+		if errors.Is(copyErr, context.Canceled) || request.Context().Err() != nil {
+			errorKind = "canceled"
+		} else if errors.Is(copyErr, context.DeadlineExceeded) {
+			errorKind = "deadline_exceeded"
+		}
+		handler.logger.WarnContext(
+			request.Context(),
+			"stream incomplete",
+			"request_id",
+			requestID,
+			"error.kind",
+			errorKind,
+			"http.response.body.size",
+			written,
+		)
+		handler.record(
+			request.Context(),
+			requestID,
+			request.Method,
+			status,
+			written,
+			errorKind,
+			readRequest.Range != "",
+		)
 		return
 	}
 	handler.record(request.Context(), requestID, request.Method, status, written, "", readRequest.Range != "")
+}
+
+// copyStream applies independent upstream-read and downstream-write progress bounds.
+func (handler *Handler) copyStream(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	writer http.ResponseWriter,
+	body io.ReadCloser,
+) (int64, error) {
+	reader := io.Reader(body)
+	if handler.upstreamIdleTimeout > 0 {
+		reader = &idleReader{reader: body, timeout: handler.upstreamIdleTimeout, cancel: cancel}
+	}
+	responseWriter := io.Writer(writer)
+	if handler.writeIdleTimeout > 0 {
+		responseWriter = &idleWriter{writer: writer, timeout: handler.writeIdleTimeout, cancel: cancel}
+	}
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	default:
+		return io.Copy(responseWriter, reader)
+	}
+}
+
+// idleReader turns a stalled upstream body read into cancellation and a bounded deadline error.
+type idleReader struct {
+	reader  io.ReadCloser
+	timeout time.Duration
+	cancel  context.CancelFunc
+}
+
+// readResult carries one potentially blocking upstream body read result.
+type readResult struct {
+	count int
+	err   error
+	data  []byte
+}
+
+// Read waits for one upstream body read only until its configured progress deadline.
+func (reader *idleReader) Read(buffer []byte) (int, error) {
+	result := make(chan readResult, 1)
+	readBuffer := make([]byte, len(buffer))
+	go func() {
+		count, err := reader.reader.Read(readBuffer)
+		result <- readResult{count: count, err: err, data: readBuffer}
+	}()
+	timer := time.NewTimer(reader.timeout)
+	defer timer.Stop()
+	select {
+	case read := <-result:
+		copy(buffer, read.data[:read.count])
+		return read.count, read.err
+	case <-timer.C:
+		reader.cancel()
+		_ = reader.reader.Close()
+		return 0, context.DeadlineExceeded
+	}
+}
+
+// idleWriter resets the response write deadline before every downstream progress attempt.
+type idleWriter struct {
+	writer  http.ResponseWriter
+	timeout time.Duration
+	cancel  context.CancelFunc
+}
+
+// Write sends one chunk while enforcing the configured no-progress deadline when supported.
+func (writer *idleWriter) Write(data []byte) (int, error) {
+	if err := http.NewResponseController(writer.writer).
+		SetWriteDeadline(time.Now().Add(writer.timeout)); err != nil &&
+		!errors.Is(err, http.ErrNotSupported) {
+		writer.cancel()
+		return 0, err
+	}
+	count, err := writer.writer.Write(data)
+	if err != nil {
+		writer.cancel()
+	}
+	return count, err
 }
 
 // head returns only the exact S3 representation attributes.
@@ -245,8 +412,8 @@ func writeAttributes(header http.Header, attributes proxy.Attributes) {
 	if attributes.ContentEncoding != "" {
 		header.Set("Content-Encoding", attributes.ContentEncoding)
 	}
-	if !attributes.Expires.IsZero() {
-		header.Set("Expires", attributes.Expires.UTC().Format(http.TimeFormat))
+	if attributes.Expires != "" {
+		header.Set("Expires", attributes.Expires)
 	}
 }
 
@@ -319,7 +486,7 @@ func parseRequest(request *http.Request) (proxy.Request, error) {
 // parseHTTPTime parses one optional HTTP date condition.
 func parseHTTPTime(value string) (*time.Time, error) {
 	if value == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // A nil time represents an absent HTTP condition.
 	}
 	parsed, err := http.ParseTime(value)
 	if err != nil {
@@ -335,10 +502,11 @@ func validETagList(value string) bool {
 	}
 	for item := range strings.SplitSeq(value, ",") {
 		item = strings.TrimSpace(item)
-		if strings.HasPrefix(item, "W/") {
-			item = strings.TrimPrefix(item, "W/")
+		if weak, found := strings.CutPrefix(item, "W/"); found {
+			item = weak
 		}
-		if len(item) < 2 || item[0] != '"' || item[len(item)-1] != '"' || strings.ContainsAny(item[1:len(item)-1], "\"\\\r\n") {
+		if len(item) < 2 || item[0] != '"' || item[len(item)-1] != '"' ||
+			strings.ContainsAny(item[1:len(item)-1], "\"\\\r\n") {
 			return false
 		}
 	}
@@ -395,7 +563,7 @@ func requestID(value string) string {
 
 // generatedRequestID creates a log-safe correlation ID without external state.
 func generatedRequestID() string {
-	buffer := make([]byte, 16)
+	buffer := make([]byte, requestIDBytes)
 	if _, err := rand.Read(buffer); err != nil {
 		return "request-id-unavailable"
 	}
@@ -404,27 +572,99 @@ func generatedRequestID() string {
 
 // Server runs the HTTP adapter until cancellation or listener failure.
 type Server struct {
-	server *http.Server
+	server        *http.Server
+	shutdownDelay time.Duration
+	shutdownGrace time.Duration
+	readiness     *Readiness
+	logger        *slog.Logger
+}
+
+// ServerOptions configures listener limits and graceful draining behavior.
+type ServerOptions struct {
+	// ReadHeaderTimeout bounds client request-header reads.
+	ReadHeaderTimeout time.Duration
+	// IdleTimeout bounds idle keep-alive connections.
+	IdleTimeout time.Duration
+	// MaxHeaderBytes bounds incoming client request headers.
+	MaxHeaderBytes int
+	// ShutdownDelay waits for load balancers to observe unready state.
+	ShutdownDelay time.Duration
+	// ShutdownGrace bounds active stream draining.
+	ShutdownGrace time.Duration
+	// Readiness is marked draining before the listener stops accepting connections.
+	Readiness *Readiness
+	// Logger receives lifecycle records; nil discards them.
+	Logger *slog.Logger
 }
 
 // NewServer constructs a plain-HTTP trusted-boundary listener.
 func NewServer(listen string, handler http.Handler) *Server {
-	return &Server{server: &http.Server{
-		Addr:              listen,
-		Handler:           handler,
-		ReadHeaderTimeout: phaseTwoReadHeaderTimeout,
-	}}
+	return NewServerWithOptions(listen, handler, ServerOptions{ReadHeaderTimeout: phaseTwoReadHeaderTimeout})
+}
+
+// NewServerWithOptions constructs a listener with explicit production limits and drain timing.
+func NewServerWithOptions(listen string, handler http.Handler, options ServerOptions) *Server {
+	if options.ReadHeaderTimeout <= 0 {
+		options.ReadHeaderTimeout = phaseTwoReadHeaderTimeout
+	}
+	if options.IdleTimeout <= 0 {
+		options.IdleTimeout = time.Minute
+	}
+	if options.MaxHeaderBytes <= 0 {
+		options.MaxHeaderBytes = defaultMaxHeaderBytes
+	}
+	if options.ShutdownGrace <= 0 {
+		options.ShutdownGrace = defaultShutdownGrace
+	}
+	if options.Logger == nil {
+		options.Logger = slog.New(slog.DiscardHandler)
+	}
+	return &Server{
+		server: &http.Server{
+			Addr:              listen,
+			Handler:           handler,
+			ReadHeaderTimeout: options.ReadHeaderTimeout,
+			IdleTimeout:       options.IdleTimeout,
+			MaxHeaderBytes:    options.MaxHeaderBytes,
+		},
+		shutdownDelay: options.ShutdownDelay,
+		shutdownGrace: options.ShutdownGrace,
+		readiness:     options.Readiness,
+		logger:        options.Logger,
+	}
 }
 
 // Run serves until ctx is canceled or the listener fails.
 func (server *Server) Run(ctx context.Context) error {
 	result := make(chan error, 1)
+	readinessContext, stopReadiness := context.WithCancel(context.Background())
+	defer stopReadiness()
+	if server.readiness != nil {
+		go server.readiness.Start(readinessContext)
+	}
+	server.logger.InfoContext(ctx, "server_starting", "component", "httpserver")
 	go func() { result <- server.server.ListenAndServe() }()
+	server.logger.InfoContext(ctx, "server_listening", "component", "httpserver", "listen", server.server.Addr)
 	select {
 	case <-ctx.Done():
-		if err := server.server.Close(); err != nil {
-			return errors.Join(ctx.Err(), err)
+		server.readiness.SetDraining()
+		server.logger.InfoContext(ctx, "shutdown_started", "component", "httpserver")
+		if server.shutdownDelay > 0 {
+			select {
+			case <-time.After(server.shutdownDelay):
+			case err := <-result:
+				if !errors.Is(err, http.ErrServerClosed) {
+					return err
+				}
+			}
 		}
+		shutdownContext, cancel := context.WithTimeout(context.Background(), server.shutdownGrace)
+		defer cancel()
+		if err := server.server.Shutdown(shutdownContext); err != nil {
+			server.logger.ErrorContext(ctx, "shutdown_forced", "component", "httpserver")
+			return err
+		}
+		server.logger.InfoContext(ctx, "shutdown_completed", "component", "httpserver")
 		return nil
 	case err := <-result:
 		if errors.Is(err, http.ErrServerClosed) {

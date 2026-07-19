@@ -35,6 +35,28 @@ const (
 	DefaultCatalogTimeout = 30 * time.Second
 	// DefaultCatalogAttempts is the normative compare-and-swap attempt limit.
 	DefaultCatalogAttempts = 4
+	// DefaultProxyMaxStreams is the normative concurrent S3-backed stream limit.
+	DefaultProxyMaxStreams = 64
+	// DefaultProxyReadHeaderTimeout bounds client request-header reads.
+	DefaultProxyReadHeaderTimeout = 5 * time.Second
+	// DefaultProxyIdleTimeout bounds idle keep-alive connections.
+	DefaultProxyIdleTimeout = 60 * time.Second
+	// DefaultProxyUpstreamIdleTimeout bounds no-progress S3 body reads.
+	DefaultProxyUpstreamIdleTimeout = 30 * time.Second
+	// DefaultProxyWriteIdleTimeout bounds no-progress client writes.
+	DefaultProxyWriteIdleTimeout = 30 * time.Second
+	// DefaultProxyMaxHeaderBytes bounds incoming request headers.
+	DefaultProxyMaxHeaderBytes = 32768
+	// DefaultProxyShutdownDelay waits for load balancers to observe unready state.
+	DefaultProxyShutdownDelay = 5 * time.Second
+	// DefaultProxyShutdownGrace bounds draining after listener shutdown begins.
+	DefaultProxyShutdownGrace = 30 * time.Second
+	// DefaultProxyReadinessInterval controls background catalog probe cadence.
+	DefaultProxyReadinessInterval = 10 * time.Second
+	// DefaultProxyReadinessTimeout bounds one catalog readiness probe.
+	DefaultProxyReadinessTimeout = 2 * time.Second
+	// DefaultProxyReadinessStaleness is the longest age of a successful readiness probe.
+	DefaultProxyReadinessStaleness = 30 * time.Second
 )
 
 // S3 contains validated settings shared by publisher and proxy adapters.
@@ -77,12 +99,36 @@ type Publish struct {
 	CatalogAttempts int
 }
 
-// Proxy contains validated settings for the Phase 2 object-serving process.
+// Proxy contains validated settings for the production object-serving process.
 type Proxy struct {
 	// S3 contains the shared private-bucket settings.
 	S3 S3
 	// Listen is the plain-HTTP trusted-boundary listener address.
 	Listen string
+	// MaxStreams bounds concurrent S3-backed object streams.
+	MaxStreams int
+	// ReadHeaderTimeout bounds client request-header reads.
+	ReadHeaderTimeout time.Duration
+	// IdleTimeout bounds idle keep-alive connections.
+	IdleTimeout time.Duration
+	// UpstreamIdleTimeout bounds no-progress S3 body reads.
+	UpstreamIdleTimeout time.Duration
+	// WriteIdleTimeout bounds no-progress downstream writes.
+	WriteIdleTimeout time.Duration
+	// MaxHeaderBytes bounds client request header size.
+	MaxHeaderBytes int
+	// ShutdownDelay gives load balancers time to observe draining readiness.
+	ShutdownDelay time.Duration
+	// ShutdownGrace bounds active stream draining.
+	ShutdownGrace time.Duration
+	// ReadinessInterval controls catalog probe cadence.
+	ReadinessInterval time.Duration
+	// ReadinessTimeout bounds one catalog probe.
+	ReadinessTimeout time.Duration
+	// ReadinessStaleness bounds the age of a successful catalog probe.
+	ReadinessStaleness time.Duration
+	// LogLevel selects the structured proxy logging threshold.
+	LogLevel string
 }
 
 // rawConfig is the strict YAML, flag, and environment decoding target.
@@ -90,6 +136,7 @@ type rawConfig struct {
 	S3      rawS3      `mapstructure:"s3"`
 	Publish rawPublish `mapstructure:"publish"`
 	Proxy   rawProxy   `mapstructure:"proxy"`
+	Logging rawLogging `mapstructure:"logging"`
 }
 
 // rawS3 contains unvalidated S3 boundary values.
@@ -117,7 +164,23 @@ type rawPublish struct {
 
 // rawProxy contains unvalidated proxy boundary values.
 type rawProxy struct {
-	Listen string `mapstructure:"listen"`
+	Listen              string        `mapstructure:"listen"`
+	MaxStreams          int           `mapstructure:"max_streams"`
+	ReadHeaderTimeout   time.Duration `mapstructure:"read_header_timeout"`
+	IdleTimeout         time.Duration `mapstructure:"idle_timeout"`
+	UpstreamIdleTimeout time.Duration `mapstructure:"upstream_idle_timeout"`
+	WriteIdleTimeout    time.Duration `mapstructure:"write_idle_timeout"`
+	MaxHeaderBytes      int           `mapstructure:"max_header_bytes"`
+	ShutdownDelay       time.Duration `mapstructure:"shutdown_delay"`
+	ShutdownGrace       time.Duration `mapstructure:"shutdown_grace"`
+	ReadinessInterval   time.Duration `mapstructure:"readiness_interval"`
+	ReadinessTimeout    time.Duration `mapstructure:"readiness_timeout"`
+	ReadinessStaleness  time.Duration `mapstructure:"readiness_staleness"`
+}
+
+// rawLogging contains unvalidated proxy logging boundary values.
+type rawLogging struct {
+	Level string `mapstructure:"level"`
 }
 
 // binding maps one Viper key to one Cobra flag and stable environment variable.
@@ -171,7 +234,7 @@ func LoadPublish(command *cobra.Command, vp *viper.Viper) (Publish, error) {
 
 // LoadProxy resolves and validates the Phase 2 proxy configuration.
 func LoadProxy(command *cobra.Command, vp *viper.Viper) (Proxy, error) {
-	raw, err := load(command, vp, append(s3Bindings(), proxyBindings()...))
+	raw, err := load(command, vp, append(append(s3Bindings(), proxyBindings()...), loggingBindings()...))
 	if err != nil {
 		return Proxy{}, err
 	}
@@ -186,7 +249,59 @@ func LoadProxy(command *cobra.Command, vp *viper.Viper) (Proxy, error) {
 	if _, _, err := net.SplitHostPort(listen); err != nil {
 		return Proxy{}, failure.Wrap(failure.KindInvalidInput, "validate proxy.listen", err)
 	}
-	return Proxy{S3: s3Config, Listen: listen}, nil
+	if raw.Proxy.MaxStreams < 1 || raw.Proxy.MaxHeaderBytes < 1 {
+		return Proxy{}, failure.New(
+			failure.KindInvalidInput,
+			"validate proxy limits",
+			"stream and header limits must be positive",
+		)
+	}
+	for name, duration := range map[string]time.Duration{
+		"proxy.read_header_timeout":   raw.Proxy.ReadHeaderTimeout,
+		"proxy.idle_timeout":          raw.Proxy.IdleTimeout,
+		"proxy.upstream_idle_timeout": raw.Proxy.UpstreamIdleTimeout,
+		"proxy.write_idle_timeout":    raw.Proxy.WriteIdleTimeout,
+		"proxy.shutdown_delay":        raw.Proxy.ShutdownDelay,
+		"proxy.shutdown_grace":        raw.Proxy.ShutdownGrace,
+		"proxy.readiness_interval":    raw.Proxy.ReadinessInterval,
+		"proxy.readiness_timeout":     raw.Proxy.ReadinessTimeout,
+		"proxy.readiness_staleness":   raw.Proxy.ReadinessStaleness,
+	} {
+		if err := validatePositiveDuration(name, duration); err != nil {
+			return Proxy{}, err
+		}
+	}
+	if raw.Proxy.ReadinessStaleness < raw.Proxy.ReadinessInterval {
+		return Proxy{}, failure.New(
+			failure.KindInvalidInput,
+			"validate proxy.readiness_staleness",
+			"staleness must not be shorter than the probe interval",
+		)
+	}
+	level := strings.ToLower(strings.TrimSpace(raw.Logging.Level))
+	if level != "debug" && level != "info" && level != "warn" && level != "error" {
+		return Proxy{}, failure.New(
+			failure.KindInvalidInput,
+			"validate logging.level",
+			"level must be debug, info, warn, or error",
+		)
+	}
+	return Proxy{
+		S3:                  s3Config,
+		Listen:              listen,
+		MaxStreams:          raw.Proxy.MaxStreams,
+		ReadHeaderTimeout:   raw.Proxy.ReadHeaderTimeout,
+		IdleTimeout:         raw.Proxy.IdleTimeout,
+		UpstreamIdleTimeout: raw.Proxy.UpstreamIdleTimeout,
+		WriteIdleTimeout:    raw.Proxy.WriteIdleTimeout,
+		MaxHeaderBytes:      raw.Proxy.MaxHeaderBytes,
+		ShutdownDelay:       raw.Proxy.ShutdownDelay,
+		ShutdownGrace:       raw.Proxy.ShutdownGrace,
+		ReadinessInterval:   raw.Proxy.ReadinessInterval,
+		ReadinessTimeout:    raw.Proxy.ReadinessTimeout,
+		ReadinessStaleness:  raw.Proxy.ReadinessStaleness,
+		LogLevel:            level,
+	}, nil
 }
 
 // load applies defaults, optional strict YAML, explicit environment keys, and command flags.
@@ -360,5 +475,78 @@ func publishBindings() []binding {
 
 // proxyBindings returns the stable Phase 2 proxy source mappings.
 func proxyBindings() []binding {
-	return []binding{{key: "proxy.listen", flag: "listen", env: "SIMPLESTREAMS_S3_LISTEN", defaultV: ":8080"}}
+	return []binding{
+		{key: "proxy.listen", flag: "listen", env: "SIMPLESTREAMS_S3_LISTEN", defaultV: ":8080"},
+		{
+			key:      "proxy.max_streams",
+			flag:     "max-streams",
+			env:      "SIMPLESTREAMS_S3_MAX_STREAMS",
+			defaultV: DefaultProxyMaxStreams,
+		},
+		{
+			key:      "proxy.read_header_timeout",
+			flag:     "read-header-timeout",
+			env:      "SIMPLESTREAMS_S3_READ_HEADER_TIMEOUT",
+			defaultV: DefaultProxyReadHeaderTimeout,
+		},
+		{
+			key:      "proxy.idle_timeout",
+			flag:     "idle-timeout",
+			env:      "SIMPLESTREAMS_S3_IDLE_TIMEOUT",
+			defaultV: DefaultProxyIdleTimeout,
+		},
+		{
+			key:      "proxy.upstream_idle_timeout",
+			flag:     "upstream-idle-timeout",
+			env:      "SIMPLESTREAMS_S3_UPSTREAM_IDLE_TIMEOUT",
+			defaultV: DefaultProxyUpstreamIdleTimeout,
+		},
+		{
+			key:      "proxy.write_idle_timeout",
+			flag:     "write-idle-timeout",
+			env:      "SIMPLESTREAMS_S3_WRITE_IDLE_TIMEOUT",
+			defaultV: DefaultProxyWriteIdleTimeout,
+		},
+		{
+			key:      "proxy.max_header_bytes",
+			flag:     "max-header-bytes",
+			env:      "SIMPLESTREAMS_S3_MAX_HEADER_BYTES",
+			defaultV: DefaultProxyMaxHeaderBytes,
+		},
+		{
+			key:      "proxy.shutdown_delay",
+			flag:     "shutdown-delay",
+			env:      "SIMPLESTREAMS_S3_SHUTDOWN_DELAY",
+			defaultV: DefaultProxyShutdownDelay,
+		},
+		{
+			key:      "proxy.shutdown_grace",
+			flag:     "shutdown-grace",
+			env:      "SIMPLESTREAMS_S3_SHUTDOWN_GRACE",
+			defaultV: DefaultProxyShutdownGrace,
+		},
+		{
+			key:      "proxy.readiness_interval",
+			flag:     "readiness-interval",
+			env:      "SIMPLESTREAMS_S3_READINESS_INTERVAL",
+			defaultV: DefaultProxyReadinessInterval,
+		},
+		{
+			key:      "proxy.readiness_timeout",
+			flag:     "readiness-timeout",
+			env:      "SIMPLESTREAMS_S3_READINESS_TIMEOUT",
+			defaultV: DefaultProxyReadinessTimeout,
+		},
+		{
+			key:      "proxy.readiness_staleness",
+			flag:     "readiness-staleness",
+			env:      "SIMPLESTREAMS_S3_READINESS_STALENESS",
+			defaultV: DefaultProxyReadinessStaleness,
+		},
+	}
+}
+
+// loggingBindings returns source mappings for structured proxy logging.
+func loggingBindings() []binding {
+	return []binding{{key: "logging.level", flag: "log-level", env: "SIMPLESTREAMS_S3_LOG_LEVEL", defaultV: "info"}}
 }

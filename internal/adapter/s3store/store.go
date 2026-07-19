@@ -320,7 +320,7 @@ func (store *Store) Head(ctx context.Context, key object.ObjectKey, request prox
 		output.CacheControl,
 		output.ContentDisposition,
 		output.ContentEncoding,
-		output.Expires,
+		output.ExpiresString,
 	), nil
 }
 
@@ -350,7 +350,7 @@ func (store *Store) Get(ctx context.Context, key object.ObjectKey, request proxy
 			output.CacheControl,
 			output.ContentDisposition,
 			output.ContentEncoding,
-			output.Expires,
+			output.ExpiresString,
 		),
 		Body: output.Body,
 	}, nil
@@ -367,7 +367,7 @@ func attributes(
 	cacheControl *string,
 	contentDisposition *string,
 	contentEncoding *string,
-	expires *time.Time,
+	expires *string,
 ) proxy.Attributes {
 	byteSize, err := object.NewByteSize(aws.ToInt64(size))
 	if err != nil {
@@ -383,7 +383,7 @@ func attributes(
 		CacheControl:       aws.ToString(cacheControl),
 		ContentDisposition: aws.ToString(contentDisposition),
 		ContentEncoding:    aws.ToString(contentEncoding),
-		Expires:            aws.ToTime(expires),
+		Expires:            aws.ToString(expires),
 	}
 }
 
@@ -520,6 +520,10 @@ func classify(operation string, err error) error {
 		switch apiError.ErrorCode() {
 		case "AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch":
 			return failure.Wrap(failure.KindUnauthorized, operation, err)
+		case "NotModified", "304":
+			return failure.Wrap(failure.KindNotModified, operation, err)
+		case "InvalidRange", "RequestedRangeNotSatisfiable":
+			return failure.Wrap(failure.KindRangeNotSatisfiable, operation, err)
 		case "PreconditionFailed", "ConditionalRequestConflict":
 			return failure.Wrap(failure.KindPrecondition, operation, err)
 		case "RequestTimeout", "RequestTimeoutException":

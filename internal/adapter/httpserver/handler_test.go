@@ -21,11 +21,17 @@ type fakeHTTPReader struct {
 	err       error
 	headCalls int
 	getCalls  int
+	request   proxy.Request
 }
 
 // Head returns fixed response attributes or the configured failure.
-func (reader *fakeHTTPReader) Head(_ context.Context, _ object.ObjectKey, _ proxy.Request) (proxy.Attributes, error) {
+func (reader *fakeHTTPReader) Head(
+	_ context.Context,
+	_ object.ObjectKey,
+	request proxy.Request,
+) (proxy.Attributes, error) {
 	reader.headCalls++
+	reader.request = request
 	if reader.err != nil {
 		return proxy.Attributes{}, reader.err
 	}
@@ -34,8 +40,9 @@ func (reader *fakeHTTPReader) Head(_ context.Context, _ object.ObjectKey, _ prox
 }
 
 // Get returns a fixed exact response body or the configured failure.
-func (reader *fakeHTTPReader) Get(_ context.Context, _ object.ObjectKey, _ proxy.Request) (proxy.Object, error) {
+func (reader *fakeHTTPReader) Get(_ context.Context, _ object.ObjectKey, request proxy.Request) (proxy.Object, error) {
 	reader.getCalls++
+	reader.request = request
 	if reader.err != nil {
 		return proxy.Object{}, reader.err
 	}
@@ -44,6 +51,86 @@ func (reader *fakeHTTPReader) Get(_ context.Context, _ object.ObjectKey, _ proxy
 		Attributes: proxy.Attributes{Size: size, ContentType: "application/json", ETag: `"etag"`},
 		Body:       io.NopCloser(strings.NewReader("catalog")),
 	}, nil
+}
+
+// TestHandlerForwardsOneValidRangeAndConditions proves the transport adapter preserves valid request semantics.
+func TestHandlerForwardsOneValidRangeAndConditions(t *testing.T) {
+	t.Parallel()
+	reader := &fakeHTTPReader{}
+	handler := NewHandler(proxy.NewService(reader, ""))
+	request := httptest.NewRequest(http.MethodGet, "/streams/v1/index.json", nil)
+	request.Header.Set("Range", "bytes=1-3")
+	request.Header.Set("If-Match", `"etag"`)
+	request.Header.Set("If-None-Match", `W/"older"`)
+	request.Header.Set("If-Modified-Since", "Mon, 02 Jan 2006 15:04:05 GMT")
+	request.Header.Set("If-Unmodified-Since", "Tue, 03 Jan 2006 15:04:05 GMT")
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Equal(t, "bytes=1-3", reader.request.Range)
+	assert.Equal(t, `"etag"`, reader.request.IfMatch)
+	assert.Equal(t, `W/"older"`, reader.request.IfNoneMatch)
+	require.NotNil(t, reader.request.IfModifiedSince)
+	require.NotNil(t, reader.request.IfUnmodifiedSince)
+}
+
+// TestHandlerFallsBackToFullRepresentationForUnsupportedRangeSyntax proves unsupported range forms are not forwarded.
+func TestHandlerFallsBackToFullRepresentationForUnsupportedRangeSyntax(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		rangeValue string
+		ifRange    string
+	}{
+		{name: "multiple ranges", rangeValue: "bytes=0-1,3-4"},
+		{name: "unsupported unit", rangeValue: "items=0-1"},
+		{name: "invalid bounds", rangeValue: "bytes=5-1"},
+		{name: "if range", rangeValue: "bytes=0-1", ifRange: `"etag"`},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			reader := &fakeHTTPReader{}
+			handler := NewHandler(proxy.NewService(reader, ""))
+			request := httptest.NewRequest(http.MethodGet, "/streams/v1/index.json", nil)
+			request.Header.Set("Range", testCase.rangeValue)
+			request.Header.Set("If-Range", testCase.ifRange)
+
+			handler.ServeHTTP(httptest.NewRecorder(), request)
+
+			assert.Empty(t, reader.request.Range)
+		})
+	}
+}
+
+// TestHandlerRejectsMalformedConditions proves malformed boundary values do not reach the S3 port.
+func TestHandlerRejectsMalformedConditions(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		header string
+		value  string
+	}{
+		{name: "invalid match", header: "If-Match", value: "not-an-etag"},
+		{name: "invalid modified time", header: "If-Modified-Since", value: "not-a-date"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			reader := &fakeHTTPReader{}
+			handler := NewHandler(proxy.NewService(reader, ""))
+			request := httptest.NewRequest(http.MethodGet, "/streams/v1/index.json", nil)
+			request.Header.Set(testCase.header, testCase.value)
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			assert.Equal(t, http.StatusBadRequest, response.Code)
+			assert.Zero(t, reader.getCalls)
+		})
+	}
 }
 
 // TestHandlerStreamsGETAndMapsHEADWithoutBodies proves the thin Phase 2 HTTP contract.

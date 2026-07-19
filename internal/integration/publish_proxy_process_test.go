@@ -64,11 +64,11 @@ func TestPublishAndProxyProcess(t *testing.T) {
 
 	missing := scenario.request(http.MethodGet, "/streams/v1/missing.json")
 	assert.Equal(t, http.StatusNotFound, missing.status)
-	assert.JSONEq(t, `{"code":"not_found"}`, string(missing.body))
+	assertErrorCode(t, missing.body, "not_found")
 
 	unsafe := scenario.request(http.MethodGet, "/%2e%2e/streams/v1/index.json")
 	assert.Equal(t, http.StatusBadRequest, unsafe.status)
-	assert.JSONEq(t, `{"code":"invalid_input"}`, string(unsafe.body))
+	assertErrorCode(t, unsafe.body, "invalid_input")
 
 	_, err = scenario.publisher.Publish(t.Context(), publish.Request{
 		MetadataPath: metadataPath,
@@ -99,6 +99,18 @@ func TestPublishAndProxyProcess(t *testing.T) {
 	err = scenario.store.Create(t.Context(), input)
 	require.Error(t, err)
 	assert.Equal(t, failure.KindPrecondition, failure.KindOf(err))
+}
+
+// assertErrorCode proves a sanitized proxy error includes a stable code and correlation ID.
+func assertErrorCode(t *testing.T, body []byte, wantCode string) {
+	t.Helper()
+	var response struct {
+		Code      string `json:"code"`
+		RequestID string `json:"request_id"`
+	}
+	require.NoError(t, json.Unmarshal(body, &response))
+	assert.Equal(t, wantCode, response.Code)
+	assert.NotEmpty(t, response.RequestID)
 }
 
 // createObject builds one checksum-verified create-only adapter input.

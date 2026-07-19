@@ -29,3 +29,6 @@ Reviewed `/Users/josh/code/meigma/go-simplestreams` read-only at clean `master`,
 Gaps intentionally left for this application are the S3 adapter, Incus image-metadata extraction, full publish orchestration, artifact upload ordering, metadata signing, and HTTP serving. Simple Streams is a static file layout rather than an HTTP API, so proxy mode should remain a thin HTTP-to-S3 path gateway. Publish artifacts first, then the product document, and publish `streams/v1/index.json` last so readers do not discover incomplete objects.
 
 Potential pre-implementation housekeeping: the GitHub repository is named `simpletreams-s3` while the local folder and intended product spelling are `simplestreams-s3`.
+
+## 2026-07-18 20:46 — Repository name corrected
+Corrected the GitHub repository name from `meigma/simpletreams-s3` to `meigma/simplestreams-s3` and explicitly updated the shared local `origin` to `git@github.com:meigma/simplestreams-s3.git`. Both `master` and `journal/jmgilman` remain present and synchronized with the renamed remote. This resolves the housekeeping issue noted above before module rebranding begins.

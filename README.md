@@ -1,124 +1,97 @@
-# template-go
+# simplestreams-s3
 
-`template-go` is the reusable Go repository starter for Meigma projects.
-It includes a small Go CLI skeleton, Moon tasks, pinned CI, Dependabot, baseline repository security settings, and an enabled Release Please plus GoReleaser release layer.
+`simplestreams-s3` publishes split Incus virtual-machine images to a private Amazon S3 bucket and serves the resulting Simple Streams mirror through authenticated S3 reads.
 
-## Local Bootstrap
+The Phase 2 implementation provides the first permanent vertical slice:
 
-Prerequisites:
+- `simplestreams-s3 publish METADATA_TARBALL DISK_QCOW2` validates one split VM image and publishes it into an empty mirror root;
+- `simplestreams-s3 proxy` exposes exact `GET` and `HEAD` reads from that mirror over plain HTTP inside a trusted deployment boundary;
+- `simplestreams-s3 version` prints linker-injected build information.
 
-- [mise](https://mise.jdx.dev) — provisions every pinned tool from `mise.toml` +
-  `mise.lock`: Go, Moon, Python + uv (for the MkDocs docs project), the
-  `golangci-lint` CLI, and `melange`/`apko`/`cosign` for releases. Run
-  `mise install` once; there is nothing else to install by hand.
+Existing-catalog merge and concurrency safety arrive in Phase 3. Production HTTP behavior, readiness, structured logging, and graceful draining arrive in Phase 4. Optional telemetry and complete operator guidance arrive in Phase 5.
 
-Tool versions live in `mise.toml`; `mise.lock` records a per-platform download URL
-and checksum for each (and, for the aqua-backed CLIs, cosign/SLSA/GitHub-attestation
-verification). `mise install` runs with `locked = true`, so it **fails closed** if a
-tool lacks a pre-resolved, checksummed entry for the current platform. Moon runs every
-task against these tools as `system` binaries on PATH and manages no toolchain itself.
-To bump a tool, edit its version in `mise.toml`, run
-`mise lock --platform linux-x64,linux-arm64,macos-x64,macos-arm64`, and commit
-`mise.toml` + `mise.lock`.
+## Security boundary
 
-After creating a new repository from this template, replace the placeholder names before doing feature work:
+The bucket must remain private. Both commands authenticate to AWS through the SDK's default credential chain; static access keys are not application settings. The proxy does not authenticate downstream clients and does not terminate public TLS. Put it behind an ingress or network boundary that supplies HTTPS and the required access-control policy.
+
+The configured bucket prefix is owned exclusively by this mirror and must not contain unrelated or sensitive objects.
+
+## Inputs
+
+`publish` accepts exactly:
+
+1. an xz-compressed Incus metadata tarball containing one root `metadata.yaml`; and
+2. a QCOW2 virtual-machine disk.
+
+V1 supports `amd64`/`x86_64` and `arm64`/`aarch64`. Container images, unified images, LXD compatibility, format conversion, and catalog deletion are intentionally unsupported.
+
+## Configuration
+
+Settings use this precedence, highest first:
+
+1. command flags;
+2. `SIMPLESTREAMS_S3_*` environment variables;
+3. the YAML file explicitly selected by `--config` or `SIMPLESTREAMS_S3_CONFIG`;
+4. defaults.
+
+There is no implicit config-file search. Unknown YAML keys and invalid values fail startup. Run command help for the settings implemented in the current slice:
 
 ```sh
-go mod edit -module github.com/meigma/YOUR_REPO
-mv cmd/template-go cmd/YOUR_BINARY
+go run ./cmd/simplestreams-s3 publish --help
+go run ./cmd/simplestreams-s3 proxy --help
 ```
 
-Then update `template-go` references in the Moon tasks, GoReleaser config, `ghd.toml`, README, and package docs.
-
-## Common Tasks
-
-Moon is the standard task front door:
+Example publication:
 
 ```sh
+go run ./cmd/simplestreams-s3 publish \
+  --s3-bucket private-images \
+  --s3-region us-west-2 \
+  incus.tar.xz disk.qcow2
+```
+
+Example proxy:
+
+```sh
+SIMPLESTREAMS_S3_BUCKET=private-images \
+SIMPLESTREAMS_S3_REGION=us-west-2 \
+go run ./cmd/simplestreams-s3 proxy --listen :8080
+```
+
+## Development
+
+[mise](https://mise.jdx.dev) provisions the pinned toolchain from `mise.toml` and `mise.lock`. [Moon](https://moonrepo.dev) remains the task front door:
+
+```sh
+mise install
 moon run root:format
 moon run root:lint
-moon run root:build
 moon run root:test
 moon run root:check
 ```
 
-CI runs the same aggregate check:
+The containerized S3 adapter test is opt-in and uses Testcontainers with MinIO:
 
 ```sh
-moon ci --summary minimal
+SIMPLESTREAMS_S3_INTEGRATION=1 \
+go test -count=1 -run TestStoreIntegrationExercisesCreateHeadAndGet ./internal/adapter/s3store
 ```
 
-The starter CLI is intentionally small:
+## Container image
+
+The release image has no Dockerfile. Melange builds the Go binary into a signed Wolfi apk, and apko assembles the minimal non-root, multi-architecture runtime image.
 
 ```sh
-go run ./cmd/template-go --version
-go run ./cmd/template-go --message "hello from cobra"
-go test ./...
+mise run image-local
+docker run --rm simplestreams-s3:dev version
 ```
 
-The CLI entrypoint uses Cobra and Viper in the same shape as other Meigma CLIs: `cmd/template-go` stays thin, `internal/cli` owns command construction, and Viper-backed flags can also be supplied through `TEMPLATE_GO_*` environment variables.
+## Release and verification
 
-## Container Image
-
-The image is built **without a Dockerfile**:
-[melange](https://github.com/chainguard-dev/melange) compiles the binary into a
-signed [Wolfi](https://github.com/wolfi-dev) apk (`melange.yaml`), and
-[apko](https://github.com/chainguard-dev/apko) assembles it into a minimal,
-multi-arch, non-root runtime image (`apko.yaml`) — the modern equivalent of the
-former distroless image (uid 65532, ca-certificates, tzdata, no shell). Each
-architecture builds natively (no QEMU). Build and run it locally with the bundled
-mise task (it uses melange's Docker runner, so Docker must be running):
+Release Please, GoReleaser, melange, apko, cosign, SBOM attestation, and the isolated provenance workflow remain intact under the `simplestreams-s3` product, package, binary, and image names. The aggregate local and CI gate is:
 
 ```sh
-mise run image-local              # build the host-arch image, load as template-go:dev
-docker run --rm template-go:dev --version
-docker run --rm template-go:dev --message "hello from container"
+moon run root:check
 ```
 
-The Wolfi base intentionally floats to the latest packages (fresh CA bundle and
-timezones, low CVE surface); the exact resolved versions are recorded in the
-per-build SBOM and provenance attestation rather than pinned. `version`, `commit`,
-and `date` are stamped into the binary via melange `--vars-file` — the release
-workflow supplies the real values, and `mise run image-local` uses `dev`.
-
-## CI and Security
-
-The default CI workflow keeps permissions minimal, pins external actions, disables checkout credential persistence, and delegates checks to Moon.
-It uses GitHub-hosted dependency caches for Go, golangci-lint, and uv download artifacts while leaving Moon remote caching as an optional follow-up for repositories that need a shared task-output cache.
-The docs workflow builds the MkDocs site on pull requests and deploys `docs/build` to GitHub Pages from the default branch.
-The scheduled security scan workflow builds the local container image weekly, scans it for high/critical fixed vulnerabilities, and uploads SARIF results to GitHub code scanning.
-Dependabot covers GitHub Actions, the root Go module, and the docs uv project.
-
-Repository settings live in `.github/repository-settings.toml`.
-They default to immutable releases, private vulnerability reporting, signed commits, squash-only merges, GitHub Pages workflow publishing, and protected tags.
-
-## Release Layer
-
-Release automation is enabled for the template application so this repository proves the full binary and container release lifecycle before generated projects inherit it.
-Repositories generated from the template should update the release app credentials, package names, asset patterns, container image name, and `ghd.toml` signer workflow before cutting their first release.
-
-The release path is:
-
-- Release Please opens and maintains the release PR.
-- Release Please creates a draft GitHub release and tag after merge.
-- Release Dry Run rehearses the GoReleaser binary path and the native-runner melange/apko container build path on pull requests.
-- GoReleaser builds binaries, checksums, and SBOMs without publishing directly.
-- The release workflow uploads assets to the draft release; a separate, isolated reusable workflow (`attest.yml`) generates the GitHub-hosted provenance attestation for the binary checksums.
-- The release workflow builds amd64 and arm64 apks with melange on native GitHub-hosted runners, assembles and publishes `ghcr.io/meigma/template-go:vX.Y.Z` as a multi-platform manifest with apko, signs it with keyless cosign, and attaches a syft SBOM attestation; the isolated `attest.yml` workflow then creates the GitHub-native provenance attestation for the manifest digest.
-- Generating both provenance attestations in the isolated `attest.yml` reusable workflow (not in the build job) keeps the signing identity unreachable by build steps — the SLSA Build L3 isolation requirement — while staying on GitHub's attestation API (verify with `gh attestation verify --signer-workflow …/attest.yml`).
-- A human inspects the draft release before publication.
-
-The root `ghd.toml` matches the default GoReleaser output so generated projects can be installed with `ghd` once the release workflow runs.
-After cloning this template, update `provenance.signer_workflow`, package names, asset patterns, binary paths, and image names to match the new repository and binary name.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, local setup expectations, and pull request workflow.
-
-## Security
-
-See [SECURITY.md](SECURITY.md) for supported versions and the private vulnerability reporting path.
-
-## License
-
-Add the repository license before publishing a project generated from this template.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and [SECURITY.md](SECURITY.md) for vulnerability reporting.

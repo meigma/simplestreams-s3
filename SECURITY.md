@@ -1,6 +1,6 @@
 # Security Policy
 
-This template expects generated projects to use GitHub private vulnerability reporting.
+This project uses GitHub private vulnerability reporting.
 Replace this file with the actual support policy before publishing a generated repository.
 
 ## Supported Versions

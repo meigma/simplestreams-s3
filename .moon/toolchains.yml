@@ -1,4 +1,4 @@
-# Toolchains for the current template.
+# Toolchains for the current project.
 #
 # Tool versions (Go, Python, uv, and the CLIs) are managed by mise (mise.toml +
 # mise.lock); moon runs every task against `system` binaries that mise puts on

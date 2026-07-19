@@ -34,3 +34,6 @@ The implementation now adopts each catalog attempt through a fresh `simplestream
 Final local proof passed: `go test -race ./...`, `moon run root:integration`, `moon run root:check`, zero lint findings, and a clean worktree. The integration path exercised two publications through MinIO and preserved both versions through `If-Match` replacement.
 
 The opt-in real-AWS conformance test also passed in a fresh one-hour whzbox sandbox against bucket `simplestreams-s3-phase3-jmgilman-019f7b95`: create-only commit succeeded, a second absent-create and wrong revision were rejected, the observed revision replaced the index, and the old revision was then rejected. Test cleanup removed the object; deleting the bucket succeeded; `whzbox destroy --yes` succeeded; and `whzbox list --json` returned `[]`. The checkout-built temporary whzbox binary was moved to Trash. PR checks were queued at handoff. Pause here for human review; do not merge without approval.
+
+## 2026-07-19 12:51 — Hosted checks passed
+PR #9's hosted checks passed at unchanged head `b713ed3f78b3a4468dfe83de9b662645ab3afd7b`: main CI passed in 2m39s, GitHub Pages passed, and Kusari Inspector passed. Non-applicable release, container, and deployment dry-run jobs skipped. Phase 3 is ready for human review and remains unmerged.

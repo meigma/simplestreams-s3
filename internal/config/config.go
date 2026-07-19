@@ -33,6 +33,8 @@ const (
 	DefaultPublishTimeout = 2 * time.Hour
 	// DefaultCatalogTimeout is the normative catalog-operation and cleanup deadline.
 	DefaultCatalogTimeout = 30 * time.Second
+	// DefaultCatalogAttempts is the normative compare-and-swap attempt limit.
+	DefaultCatalogAttempts = 4
 )
 
 // S3 contains validated settings shared by publisher and proxy adapters.
@@ -71,6 +73,8 @@ type Publish struct {
 	Timeout time.Duration
 	// CatalogTimeout bounds catalog writes and multipart failure cleanup.
 	CatalogTimeout time.Duration
+	// CatalogAttempts bounds compare-and-swap publication attempts.
+	CatalogAttempts int
 }
 
 // Proxy contains validated settings for the Phase 2 object-serving process.
@@ -104,10 +108,11 @@ type rawS3 struct {
 
 // rawPublish contains unvalidated publication boundary values.
 type rawPublish struct {
-	Aliases        []string      `mapstructure:"aliases"`
-	ReleaseTitle   string        `mapstructure:"release_title"`
-	Timeout        time.Duration `mapstructure:"timeout"`
-	CatalogTimeout time.Duration `mapstructure:"catalog_timeout"`
+	Aliases         []string      `mapstructure:"aliases"`
+	ReleaseTitle    string        `mapstructure:"release_title"`
+	Timeout         time.Duration `mapstructure:"timeout"`
+	CatalogTimeout  time.Duration `mapstructure:"catalog_timeout"`
+	CatalogAttempts int           `mapstructure:"catalog_attempts"`
 }
 
 // rawProxy contains unvalidated proxy boundary values.
@@ -147,12 +152,20 @@ func LoadPublish(command *cobra.Command, vp *viper.Viper) (Publish, error) {
 	if err := validatePositiveDuration("publish.catalog_timeout", raw.Publish.CatalogTimeout); err != nil {
 		return Publish{}, err
 	}
+	if raw.Publish.CatalogAttempts < 1 {
+		return Publish{}, failure.New(
+			failure.KindInvalidInput,
+			"validate publish.catalog_attempts",
+			"value must be positive",
+		)
+	}
 	return Publish{
-		S3:             s3Config,
-		Aliases:        aliases,
-		ReleaseTitle:   strings.TrimSpace(raw.Publish.ReleaseTitle),
-		Timeout:        raw.Publish.Timeout,
-		CatalogTimeout: raw.Publish.CatalogTimeout,
+		S3:              s3Config,
+		Aliases:         aliases,
+		ReleaseTitle:    strings.TrimSpace(raw.Publish.ReleaseTitle),
+		Timeout:         raw.Publish.Timeout,
+		CatalogTimeout:  raw.Publish.CatalogTimeout,
+		CatalogAttempts: raw.Publish.CatalogAttempts,
 	}, nil
 }
 
@@ -335,6 +348,12 @@ func publishBindings() []binding {
 			flag:     "catalog-timeout",
 			env:      "SIMPLESTREAMS_S3_CATALOG_TIMEOUT",
 			defaultV: DefaultCatalogTimeout,
+		},
+		{
+			key:      "publish.catalog_attempts",
+			flag:     "catalog-attempts",
+			env:      "SIMPLESTREAMS_S3_CATALOG_ATTEMPTS",
+			defaultV: DefaultCatalogAttempts,
 		},
 	}
 }

@@ -24,7 +24,7 @@ func NewCommand(run Runner) *cobra.Command {
 	vp := viper.New()
 	command := &cobra.Command{
 		Use:   "publish METADATA_TARBALL DISK_QCOW2",
-		Short: "Publish one split Incus VM image into an empty private S3 mirror",
+		Short: "Safely publish one split Incus VM image into a private S3 mirror",
 		Args:  cobra.ExactArgs(publishArgumentCount),
 		RunE: func(command *cobra.Command, args []string) error {
 			if run == nil {
@@ -60,6 +60,7 @@ func NewCommand(run Runner) *cobra.Command {
 	command.Flags().String("release-title", "", "release title override")
 	command.Flags().Duration("publish-timeout", config.DefaultPublishTimeout, "overall publication deadline")
 	command.Flags().Duration("catalog-timeout", config.DefaultCatalogTimeout, "catalog operation and cleanup deadline")
+	command.Flags().Int("catalog-attempts", config.DefaultCatalogAttempts, "maximum catalog compare-and-swap attempts")
 	return command
 }
 
@@ -68,7 +69,7 @@ func addConfigFlag(flags *pflag.FlagSet) {
 	flags.String("config", "", "optional YAML configuration file")
 }
 
-// addS3Flags adds the shared Phase 2 private-bucket settings.
+// addS3Flags adds the shared private-bucket settings.
 func addS3Flags(flags *pflag.FlagSet) {
 	flags.String("s3-bucket", "", "private S3 bucket name")
 	flags.String("s3-prefix", "", "owned mirror-root key prefix")

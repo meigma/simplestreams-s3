@@ -2,11 +2,13 @@
 package s3store
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -173,20 +175,49 @@ func newStore(
 	}, nil
 }
 
-// Exists reports whether an exact object key is visible through HeadObject.
-func (store *Store) Exists(ctx context.Context, key object.ObjectKey) (bool, error) {
-	_, err := store.client.HeadObject(ctx, &s3.HeadObjectInput{
+// Open performs a revision-aware streaming read for the publish port.
+func (store *Store) Open(ctx context.Context, key object.ObjectKey) (publish.ReadObject, error) {
+	output, err := store.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket:              aws.String(store.bucket.String()),
 		Key:                 aws.String(key.String()),
 		ExpectedBucketOwner: store.expectedBucketOwner,
+		ChecksumMode:        s3types.ChecksumModeEnabled,
 	})
-	if err == nil {
-		return true, nil
+	if err != nil {
+		return publish.ReadObject{}, classify("read object", err)
 	}
-	if isNotFound(err) {
-		return false, nil
+	attributes, err := publishObjectAttributes(
+		output.ContentLength,
+		output.Metadata,
+		output.ChecksumSHA256,
+		output.ChecksumCRC64NVME,
+		output.ETag,
+	)
+	if err != nil {
+		_ = output.Body.Close()
+		return publish.ReadObject{}, err
 	}
-	return false, classify("head object", err)
+	return publish.ReadObject{Body: output.Body, Attributes: attributes}, nil
+}
+
+// Stat reads immutable verification attributes with S3 checksum mode enabled.
+func (store *Store) Stat(ctx context.Context, key object.ObjectKey) (publish.ObjectAttributes, error) {
+	output, err := store.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket:              aws.String(store.bucket.String()),
+		Key:                 aws.String(key.String()),
+		ExpectedBucketOwner: store.expectedBucketOwner,
+		ChecksumMode:        s3types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		return publish.ObjectAttributes{}, classify("inspect object", err)
+	}
+	return publishObjectAttributes(
+		output.ContentLength,
+		output.Metadata,
+		output.ChecksumSHA256,
+		output.ChecksumCRC64NVME,
+		output.ETag,
+	)
 }
 
 // Create performs a create-only upload with expected checksums and bounded buffering.
@@ -217,6 +248,49 @@ func (store *Store) Create(ctx context.Context, input publish.CreateObject) erro
 	}
 	if _, err := store.uploader.UploadObject(ctx, uploadInput); err != nil {
 		return classify("create object", err)
+	}
+	return nil
+}
+
+// Commit conditionally creates or replaces the mutable root index object.
+func (store *Store) Commit(
+	ctx context.Context,
+	input publish.CreateObject,
+	revision object.CatalogRevision,
+) error {
+	body, err := input.Open()
+	if err != nil {
+		return err
+	}
+	data, readErr := io.ReadAll(body)
+	closeErr := body.Close()
+	if readErr != nil {
+		return failure.Wrap(failure.KindIntegrity, "read catalog index body", readErr)
+	}
+	if closeErr != nil {
+		return failure.Wrap(failure.KindIntegrity, "close catalog index body", closeErr)
+	}
+	if int64(len(data)) != input.Size.Int64() || object.DigestBytes(data) != input.SHA256 {
+		return failure.New(failure.KindIntegrity, "verify catalog index body", "body changed before commit")
+	}
+	putInput := &s3.PutObjectInput{
+		Bucket:              aws.String(store.bucket.String()),
+		Key:                 aws.String(input.Key.String()),
+		Body:                bytes.NewReader(data),
+		ContentLength:       aws.Int64(input.Size.Int64()),
+		ContentType:         optionalString(input.ContentType),
+		ExpectedBucketOwner: store.expectedBucketOwner,
+		ChecksumAlgorithm:   s3types.ChecksumAlgorithmSha256,
+		ChecksumSHA256:      aws.String(encodeSHA256(input.SHA256)),
+		Metadata:            map[string]string{"sha256": input.SHA256.String()},
+	}
+	if revision.IsZero() {
+		putInput.IfNoneMatch = aws.String("*")
+	} else {
+		putInput.IfMatch = aws.String(revision.String())
+	}
+	if _, err := store.client.PutObject(ctx, putInput); err != nil {
+		return classify("commit catalog index", err)
 	}
 	return nil
 }
@@ -274,6 +348,93 @@ func encodeCRC64NVME(checksum object.CRC64NVME) string {
 // encodeSHA256 returns the S3 base64 binary SHA-256 checksum.
 func encodeSHA256(digest object.SHA256Digest) string {
 	return base64.StdEncoding.EncodeToString(digest.Bytes())
+}
+
+// publishObjectAttributes parses trusted checksum and revision fields for the publish port.
+func publishObjectAttributes(
+	size *int64,
+	metadata map[string]string,
+	checksumSHA256 *string,
+	checksumCRC64NVME *string,
+	etag *string,
+) (publish.ObjectAttributes, error) {
+	byteSize, err := object.NewByteSize(aws.ToInt64(size))
+	if err != nil {
+		return publish.ObjectAttributes{}, failure.Wrap(failure.KindIntegrity, "parse stored object size", err)
+	}
+	metadataDigest, err := parseHexSHA256(metadata["sha256"])
+	if err != nil {
+		return publish.ObjectAttributes{}, err
+	}
+	sha256Digest, err := parseBase64SHA256(aws.ToString(checksumSHA256))
+	if err != nil {
+		return publish.ObjectAttributes{}, err
+	}
+	crc64Checksum, err := parseBase64CRC64NVME(aws.ToString(checksumCRC64NVME))
+	if err != nil {
+		return publish.ObjectAttributes{}, err
+	}
+	var revision object.CatalogRevision
+	if value := aws.ToString(etag); value != "" {
+		revision, err = object.NewCatalogRevision(value)
+		if err != nil {
+			return publish.ObjectAttributes{}, failure.Wrap(failure.KindIntegrity, "parse object revision", err)
+		}
+	}
+	return publish.ObjectAttributes{
+		Size:              byteSize,
+		MetadataSHA256:    metadataDigest,
+		ChecksumSHA256:    sha256Digest,
+		ChecksumCRC64NVME: crc64Checksum,
+		Revision:          revision,
+	}, nil
+}
+
+// parseHexSHA256 parses optional publisher service metadata.
+func parseHexSHA256(
+	value string,
+) (*object.SHA256Digest, error) {
+	if value == "" {
+		return nil, nil //nolint:nilnil // A nil digest represents optional metadata that is absent.
+	}
+	digest, err := object.ParseSHA256Digest(value)
+	if err != nil {
+		return nil, failure.Wrap(failure.KindIntegrity, "parse stored SHA-256 metadata", err)
+	}
+	return &digest, nil
+}
+
+// parseBase64SHA256 parses an optional S3 full-object SHA-256 checksum.
+func parseBase64SHA256(
+	value string,
+) (*object.SHA256Digest, error) {
+	if value == "" {
+		return nil, nil //nolint:nilnil // A nil digest represents an optional checksum that is absent.
+	}
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, failure.Wrap(failure.KindIntegrity, "decode stored SHA-256 checksum", err)
+	}
+	digest, err := object.NewSHA256Digest(decoded)
+	if err != nil {
+		return nil, failure.Wrap(failure.KindIntegrity, "parse stored SHA-256 checksum", err)
+	}
+	return &digest, nil
+}
+
+// parseBase64CRC64NVME parses an optional S3 full-object CRC-64/NVME checksum.
+func parseBase64CRC64NVME(
+	value string,
+) (*object.CRC64NVME, error) {
+	if value == "" {
+		return nil, nil //nolint:nilnil // A nil checksum represents an optional checksum that is absent.
+	}
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil || len(decoded) != binary.Size(uint64(0)) {
+		return nil, failure.New(failure.KindIntegrity, "parse stored CRC-64/NVME checksum", "invalid checksum")
+	}
+	checksum := object.NewCRC64NVME(binary.BigEndian.Uint64(decoded))
+	return &checksum, nil
 }
 
 // optionalString returns nil for an absent optional AWS string.

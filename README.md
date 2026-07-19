@@ -2,13 +2,13 @@
 
 `simplestreams-s3` publishes split Incus virtual-machine images to a private Amazon S3 bucket and serves the resulting Simple Streams mirror through authenticated S3 reads.
 
-The Phase 2 implementation provides the first permanent vertical slice:
+The current implementation provides a safe private-mirror publication slice:
 
-- `simplestreams-s3 publish METADATA_TARBALL DISK_QCOW2` validates one split VM image and publishes it into an empty mirror root;
+- `simplestreams-s3 publish METADATA_TARBALL DISK_QCOW2` validates one split VM image, adopts a compatible existing catalog, and publishes through bounded conditional writes;
 - `simplestreams-s3 proxy` exposes exact `GET` and `HEAD` reads from that mirror over plain HTTP inside a trusted deployment boundary;
 - `simplestreams-s3 version` prints linker-injected build information.
 
-Existing-catalog merge and concurrency safety arrive in Phase 3. Production HTTP behavior, readiness, structured logging, and graceful draining arrive in Phase 4. Optional telemetry and complete operator guidance arrive in Phase 5.
+Repeating an identical publication is a no-op. Compatible versions are merged without dropping unrelated index entries, while conflicting aliases, metadata, or immutable objects fail closed. Production HTTP behavior, readiness, structured logging, and graceful draining arrive in Phase 4. Optional telemetry and complete operator guidance arrive in Phase 5.
 
 ## Security boundary
 
@@ -70,11 +70,18 @@ moon run root:test
 moon run root:check
 ```
 
-The containerized S3 adapter test is opt-in and uses Testcontainers with MinIO:
+The containerized integration gate uses Testcontainers with MinIO:
 
 ```sh
-SIMPLESTREAMS_S3_INTEGRATION=1 \
-go test -count=1 -run TestStoreIntegrationExercisesCreateHeadAndGet ./internal/adapter/s3store
+moon run root:integration
+```
+
+An additional opt-in conformance test exercises real AWS conditional-write semantics against a disposable bucket:
+
+```sh
+SIMPLESTREAMS_S3_REAL_AWS_BUCKET=disposable-test-bucket \
+SIMPLESTREAMS_S3_REAL_AWS_REGION=us-west-2 \
+go test -count=1 -tags integration -run TestRealAWSConditionalIndexWrite ./internal/integration
 ```
 
 ## Container image

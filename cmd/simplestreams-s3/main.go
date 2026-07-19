@@ -55,7 +55,7 @@ func run() int {
 	return 0
 }
 
-// publishImage composes the AWS adapter with the empty-catalog publication service.
+// publishImage composes the AWS adapter with the optimistic publication service.
 func publishImage(
 	ctx context.Context,
 	runtime config.Publish,
@@ -65,7 +65,10 @@ func publishImage(
 	if err != nil {
 		return applicationpublish.Result{}, err
 	}
-	service := applicationpublish.NewService(store, runtime.S3.Prefix)
+	service := applicationpublish.NewService(store, runtime.S3.Prefix, applicationpublish.Options{
+		CatalogAttempts: runtime.CatalogAttempts,
+		CatalogTimeout:  runtime.CatalogTimeout,
+	})
 	return service.Publish(ctx, request)
 }
 

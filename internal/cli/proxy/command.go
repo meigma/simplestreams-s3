@@ -44,7 +44,7 @@ func addConfigFlag(flags *pflag.FlagSet) {
 	flags.String("config", "", "optional YAML configuration file")
 }
 
-// addS3Flags adds the shared Phase 2 private-bucket settings.
+// addS3Flags adds the shared private-bucket settings.
 func addS3Flags(flags *pflag.FlagSet) {
 	flags.String("s3-bucket", "", "private S3 bucket name")
 	flags.String("s3-prefix", "", "owned mirror-root key prefix")

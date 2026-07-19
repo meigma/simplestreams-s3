@@ -42,6 +42,7 @@ type Documents struct {
 	productName ProductName
 	versionID   VersionID
 	artifacts   [2]ArtifactLocation
+	changed     bool
 	snapshotKey object.ObjectKey
 	snapshot    []byte
 	indexKey    object.ObjectKey
@@ -78,21 +79,31 @@ func Render(
 	releaseTitle ReleaseTitle,
 	updated time.Time,
 ) (Documents, error) {
+	return Merge(Current{}, vm, additionalAliases, releaseTitle, updated)
+}
+
+// buildCandidate constructs the one-product candidate merged by a publication attempt.
+func buildCandidate(
+	vm image.VMImage,
+	additionalAliases []Alias,
+	releaseTitle ReleaseTitle,
+	updated time.Time,
+) (candidateCatalog, error) {
 	fingerprint, err := vm.Fingerprint()
 	if err != nil {
-		return Documents{}, err
+		return candidateCatalog{}, err
 	}
 	productName, versionID, aliases, err := catalogIdentity(vm, additionalAliases)
 	if err != nil {
-		return Documents{}, err
+		return candidateCatalog{}, err
 	}
 	metadataLocation, err := artifactLocation(vm.Metadata(), ".incus.tar.xz")
 	if err != nil {
-		return Documents{}, err
+		return candidateCatalog{}, err
 	}
 	diskLocation, err := artifactLocation(vm.Disk(), ".qcow2")
 	if err != nil {
-		return Documents{}, err
+		return candidateCatalog{}, err
 	}
 	productFile, err := buildProductFile(
 		vm,
@@ -106,30 +117,13 @@ func Render(
 		fingerprint,
 	)
 	if err != nil {
-		return Documents{}, err
+		return candidateCatalog{}, err
 	}
-
-	snapshot, err := simplestreams.MarshalJSONDocument(productFile)
-	if err != nil {
-		return Documents{}, failure.Wrap(failure.KindInternal, "render product document", err)
-	}
-	snapshotDigest := object.DigestBytes(snapshot)
-	snapshotKey, err := object.NewObjectKey("streams/v1/images-" + snapshotDigest.String() + ".json")
-	if err != nil {
-		return Documents{}, failure.Wrap(failure.KindInternal, "derive product document key", err)
-	}
-	indexBody, indexKey, err := buildIndex(productFile, productName, snapshotKey)
-	if err != nil {
-		return Documents{}, err
-	}
-	return Documents{
+	return candidateCatalog{
 		productName: productName,
 		versionID:   versionID,
 		artifacts:   [2]ArtifactLocation{metadataLocation, diskLocation},
-		snapshotKey: snapshotKey,
-		snapshot:    snapshot,
-		indexKey:    indexKey,
-		index:       indexBody,
+		productFile: productFile,
 	}, nil
 }
 
@@ -254,6 +248,9 @@ func (documents Documents) VersionID() VersionID { return documents.versionID }
 
 // Artifacts returns the metadata and disk locations in fixed order.
 func (documents Documents) Artifacts() [2]ArtifactLocation { return documents.artifacts }
+
+// Changed reports whether publication needs a new snapshot and index commit.
+func (documents Documents) Changed() bool { return documents.changed }
 
 // SnapshotKey returns the immutable product-document key.
 func (documents Documents) SnapshotKey() object.ObjectKey { return documents.snapshotKey }

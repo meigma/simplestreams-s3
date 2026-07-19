@@ -32,3 +32,21 @@ Potential pre-implementation housekeeping: the GitHub repository is named `simpl
 
 ## 2026-07-18 20:46 — Repository name corrected
 Corrected the GitHub repository name from `meigma/simpletreams-s3` to `meigma/simplestreams-s3` and explicitly updated the shared local `origin` to `git@github.com:meigma/simplestreams-s3.git`. Both `master` and `journal/jmgilman` remain present and synchronized with the renamed remote. This resolves the housekeeping issue noted above before module rebranding begins.
+
+## 2026-07-18 21:47 — Proxy and publisher design
+
+Created the refined design at `.journal/001/DESIGN.md`. The document went through three deliberate passes: a complete first draft, an architecture/protocol correction pass, and a final operations/security/wording pass informed by independent reviews.
+
+The design now fixes these v1 decisions:
+
+- split Incus VMs only, with `amd64` and `arm64` as the initial architecture set;
+- publish-time metadata built with `go-simplestreams` v0.1.0;
+- content-addressed immutable artifacts and product snapshots;
+- a conditional update of `streams/v1/index.json` as the sole publication point;
+- application-owned S3 ports because the library's `Store` abstractions do not express ranges, attributes, or conditional revisions;
+- an exact, unauthenticated HTTP-to-S3 read-through proxy behind external TLS and access control;
+- bounded retries, progress timeouts, graceful cancellation, health/readiness, JSON stdout logs, and optional OTLP/HTTP metrics;
+- strict Cobra/Viper precedence and typed runtime configuration;
+- declaration comments on every hand-written named type, function, and method, including unexported and test declarations.
+
+The final pass selected AWS's current `feature/s3/transfermanager`, added local SHA-256 verification plus S3 full-object CRC-64/NVME validation for mutable input safety, made the closed Incus CUE schema explicit, and bounded catalog operations, whole publishes, and stalled proxy streams. All document reference URLs returned HTTP 200, code fences are balanced, and `git diff --check` is clean. No implementation work has started; the first implementation step is the disposable Incus compatibility spike defined in the design.

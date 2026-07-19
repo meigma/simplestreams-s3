@@ -32,14 +32,14 @@ import (
 )
 
 const (
-	minIOImage                   = "minio/minio:RELEASE.2025-04-22T22-12-26Z"
-	minIOUser                    = "integration-user"
-	minIOPassword                = "integration-password"
-	minIOBucket                  = "private-images"
-	minIORegion                  = "us-east-1"
-	minIOCRC64Poly               = 0x9a6c_9329_ac4b_c9b5
-	minIOUploadThreshold         = "1048576"
-	minIOExpectedObjectCount     = 4
+	minIOImage               = "minio/minio:RELEASE.2025-04-22T22-12-26Z"
+	minIOUser                = "integration-user"
+	minIOPassword            = "integration-password"
+	minIOBucket              = "private-images"
+	minIORegion              = "us-east-1"
+	minIOCRC64Poly           = 0x9a6c_9329_ac4b_c9b5
+	minIOUploadThreshold     = "1048576"
+	minIOExpectedObjectCount = 4
 )
 
 // minIOScenario owns one container and all collaborators for a complete integration procedure.

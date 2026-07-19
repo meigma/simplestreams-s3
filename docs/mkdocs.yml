@@ -35,6 +35,10 @@ theme:
 
 nav:
   - Home: index.md
+  - Operator guide: operator-guide.md
+  - Configuration reference: configuration.md
+  - Observability reference: observability.md
+  - Verification reference: verification.md
 
 plugins:
   - search

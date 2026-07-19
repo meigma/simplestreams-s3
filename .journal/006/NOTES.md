@@ -40,3 +40,6 @@ After explicit human approval, reverified PR #12 at reviewed head `8442a5e1a9ba5
 
 ## 2026-07-19 16:43 — Post-merge verification
 Merge-triggered CI run 29708279167 passed on squash commit `45c019ffef508b47adccb84437220db1b3d48047`, including aggregate Moon/MinIO, race detector, and real Incus acceptance jobs.
+
+## 2026-07-19 16:47 — Close
+Closed session 006 after PR #12 merged as `45c019ffef508b47adccb84437220db1b3d48047` and post-merge CI passed. Local and remote `master` are synchronized and clean; the Phase 5 feature branch and worktree are removed. The complete postmortem is in `SUMMARY.md`, durable Phase 5 state is promoted to `TECH_NOTES.md`, and Release Please PR #11 remains open for separate review. No tag or release was created.

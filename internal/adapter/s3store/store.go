@@ -9,6 +9,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -28,9 +32,12 @@ import (
 )
 
 const (
-	uploadPartSize  = int64(8 << 20)
-	uploadThreshold = int64(16 << 20)
-	uploadWorkers   = 4
+	uploadPartSize           = int64(8 << 20)
+	uploadThreshold          = int64(16 << 20)
+	uploadWorkers            = 4
+	testEndpointEnvironment  = "SIMPLESTREAMS_S3_TEST_S3_ENDPOINT"
+	testPathStyleEnvironment = "SIMPLESTREAMS_S3_TEST_S3_PATH_STYLE"
+	testThresholdEnvironment = "SIMPLESTREAMS_S3_TEST_UPLOAD_THRESHOLD_BYTES"
 )
 
 // Store implements publish and proxy ports with authenticated AWS S3 calls.
@@ -43,13 +50,70 @@ type Store struct {
 
 // clientOptions are hidden integration hooks and do not extend production compatibility.
 type clientOptions struct {
-	baseEndpoint string
-	pathStyle    bool
+	baseEndpoint    string
+	pathStyle       bool
+	uploadThreshold int64
 }
 
 // New constructs an AWS S3 adapter through the default credential and region chain.
 func New(ctx context.Context, runtime config.S3, catalogTimeout time.Duration) (*Store, error) {
-	return newStore(ctx, runtime, catalogTimeout, clientOptions{})
+	testOptions, err := clientOptionsFromEnvironment()
+	if err != nil {
+		return nil, err
+	}
+	return newStore(ctx, runtime, catalogTimeout, testOptions)
+}
+
+// clientOptionsFromEnvironment reads deliberately unsupported local integration hooks.
+func clientOptionsFromEnvironment() (clientOptions, error) {
+	endpoint := strings.TrimSpace(os.Getenv(testEndpointEnvironment))
+	pathStyleValue := strings.TrimSpace(os.Getenv(testPathStyleEnvironment))
+	thresholdValue := strings.TrimSpace(os.Getenv(testThresholdEnvironment))
+	if endpoint == "" && pathStyleValue == "" && thresholdValue == "" {
+		return clientOptions{}, nil
+	}
+	if endpoint == "" {
+		return clientOptions{}, failure.New(
+			failure.KindInvalidInput,
+			"configure S3 test endpoint",
+			"path-style test access requires a test endpoint",
+		)
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return clientOptions{}, failure.New(
+			failure.KindInvalidInput,
+			"configure S3 test endpoint",
+			"test endpoint must be an absolute HTTP or HTTPS URL",
+		)
+	}
+	pathStyle := false
+	if pathStyleValue != "" {
+		pathStyle, err = strconv.ParseBool(pathStyleValue)
+		if err != nil {
+			return clientOptions{}, failure.Wrap(
+				failure.KindInvalidInput,
+				"configure S3 test endpoint",
+				fmt.Errorf("parse path-style test setting: %w", err),
+			)
+		}
+	}
+	threshold := int64(0)
+	if thresholdValue != "" {
+		threshold, err = strconv.ParseInt(thresholdValue, 10, 64)
+		if err != nil || threshold <= 0 {
+			return clientOptions{}, failure.New(
+				failure.KindInvalidInput,
+				"configure S3 test endpoint",
+				"test upload threshold must be a positive byte count",
+			)
+		}
+	}
+	return clientOptions{
+		baseEndpoint:    endpoint,
+		pathStyle:       pathStyle,
+		uploadThreshold: threshold,
+	}, nil
 }
 
 // newStore constructs an adapter with optional local integration endpoint hooks.
@@ -94,6 +158,9 @@ func newStore(
 	uploader := transfermanager.New(client, func(options *transfermanager.Options) {
 		options.PartSizeBytes = uploadPartSize
 		options.MultipartUploadThreshold = uploadThreshold
+		if testOptions.uploadThreshold > 0 {
+			options.MultipartUploadThreshold = testOptions.uploadThreshold
+		}
 		options.Concurrency = uploadWorkers
 		options.FailTimeout = catalogTimeout
 		options.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired

@@ -8,4 +8,4 @@ title: simplestreams-s3 Docs
 
 The proxy listener is plain HTTP and unauthenticated. Deploy it behind trusted HTTPS termination and the downstream access-control policy appropriate for the environment.
 
-The current Phase 2 slice supports publication into an empty mirror root and exact proxy `GET`/`HEAD` reads. Existing-catalog safety, production proxy behavior, telemetry, and complete operator reference material follow in the later approved implementation phases.
+The current slice safely adopts compatible catalogs, makes repeated publication a no-op, preserves concurrent compatible updates through bounded conditional writes, and serves exact proxy `GET`/`HEAD` reads. Conflicting catalog or immutable-object state fails closed. Production proxy behavior, telemetry, and complete operator reference material follow in the later approved implementation phases.

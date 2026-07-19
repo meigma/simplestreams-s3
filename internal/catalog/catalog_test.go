@@ -161,6 +161,7 @@ func TestMergeRejectsIncompatibleAdoptedState(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			current := decodeCurrent(t, documentsSource(first))
 			test.mutate(&current)
 

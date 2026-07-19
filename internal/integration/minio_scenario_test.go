@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -78,7 +79,10 @@ func newMinIOScenario(t *testing.T) *minIOScenario {
 	require.NoError(t, err)
 	store, err := s3store.New(ctx, minIOS3Runtime(t), config.DefaultCatalogTimeout)
 	require.NoError(t, err)
-	publisher := publish.NewService(store, "")
+	publisher := publish.NewService(store, "", publish.Options{
+		CatalogAttempts: 4,
+		CatalogTimeout:  30 * time.Second,
+	})
 	server := httptest.NewServer(httpserver.NewHandler(proxy.NewService(store, "")))
 	t.Cleanup(server.Close)
 

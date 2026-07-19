@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -42,8 +43,8 @@ func Merge(
 	if err != nil {
 		return Documents{}, err
 	}
-	if err := validateCurrent(current); err != nil {
-		return Documents{}, err
+	if validateErr := validateCurrent(current); validateErr != nil {
+		return Documents{}, validateErr
 	}
 
 	merged, changed, err := mergeProductFile(current.ProductFile, candidate.productFile, candidate.productName)
@@ -97,7 +98,10 @@ func mergeProductFile(
 		return merged, true, nil
 	}
 	if !sameProductMetadata(existingProduct, candidateProduct) {
-		return nil, false, catalogConflict("merge product", "product identity already has different metadata or aliases")
+		return nil, false, catalogConflict(
+			"merge product",
+			"product identity already has different metadata or aliases",
+		)
 	}
 	candidateVersion := candidateProduct.Versions[firstVersionName(candidateProduct)]
 	existingVersion, exists := existingProduct.Versions[candidateVersion.Name]
@@ -136,6 +140,11 @@ func validateCurrent(current Current) error {
 	if current.ProductFile == nil {
 		return catalogConflict("adopt catalog", "images index entry has no readable product document")
 	}
+	return validateOwnedProductDocument(current, entry)
+}
+
+// validateOwnedProductDocument verifies the owned images document and index projection.
+func validateOwnedProductDocument(current Current, entry *simplestreams.IndexEntry) error {
 	if current.ProductFile.ContentID != incusschema.ContentIDImages ||
 		current.ProductFile.DataType != incusschema.DataTypeImageDownloads {
 		return catalogConflict("adopt catalog", "images product document identity is incompatible")
@@ -152,9 +161,14 @@ func validateCurrent(current Current) error {
 	if !slices.Equal(productNames, entryProducts) {
 		return catalogConflict("adopt catalog", "images index product list does not match its document")
 	}
+	return validateProductAliases(current.ProductFile, productNames)
+}
+
+// validateProductAliases verifies every product and rejects ambiguous alias ownership.
+func validateProductAliases(productFile *simplestreams.ProductFile, productNames []string) error {
 	aliasOwners := map[Alias]string{}
 	for _, productName := range productNames {
-		product := current.ProductFile.Products[productName]
+		product := productFile.Products[productName]
 		aliases, err := validateVMProduct(productName, product)
 		if err != nil {
 			return err
@@ -492,8 +506,14 @@ func firstVersionName(product *simplestreams.Product) string {
 // cloneProductFile copies the mutable product tree while preserving admitted metadata values.
 func cloneProductFile(source *simplestreams.ProductFile) *simplestreams.ProductFile {
 	result := &simplestreams.ProductFile{
-		Format: source.Format, ContentID: source.ContentID, DataType: source.DataType, Updated: source.Updated,
-		Metadata: cloneMetadata(source.Metadata), Products: make(map[string]*simplestreams.Product, len(source.Products)),
+		Format:    source.Format,
+		ContentID: source.ContentID,
+		DataType:  source.DataType,
+		Updated:   source.Updated,
+		Metadata: cloneMetadata(
+			source.Metadata,
+		),
+		Products: make(map[string]*simplestreams.Product, len(source.Products)),
 	}
 	for name, product := range source.Products {
 		result.Products[name] = cloneProduct(product)
@@ -546,9 +566,7 @@ func cloneMetadata(source map[string]any) map[string]any {
 		return nil
 	}
 	result := make(map[string]any, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
+	maps.Copy(result, source)
 	return result
 }
 

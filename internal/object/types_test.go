@@ -48,3 +48,17 @@ func TestStrongObjectValuesRoundTrip(t *testing.T) {
 	assert.EqualValues(t, len("catalog"), size.Int64())
 	assert.Len(t, digest.String(), 64)
 }
+
+// TestNewCatalogRevisionPreservesOpaqueValues proves revisions are validated but never interpreted.
+func TestNewCatalogRevisionPreservesOpaqueValues(t *testing.T) {
+	t.Parallel()
+	revision, err := NewCatalogRevision(`"opaque-etag"`)
+	require.NoError(t, err)
+	assert.Equal(t, `"opaque-etag"`, revision.String())
+	assert.False(t, revision.IsZero())
+
+	for _, value := range []string{"", " revision", "revision "} {
+		_, err := NewCatalogRevision(value)
+		require.Error(t, err)
+	}
+}

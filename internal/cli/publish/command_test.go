@@ -39,6 +39,7 @@ func TestCommandAppliesFlagEnvironmentFileDefaultPrecedence(t *testing.T) {
 	assert.Equal(t, "flag-bucket", captured.S3.Bucket.String())
 	assert.Equal(t, config.DefaultS3MaxAttempts, captured.S3.MaxAttempts)
 	assert.Equal(t, config.DefaultPublishTimeout, captured.Timeout)
+	assert.Equal(t, config.DefaultCatalogAttempts, captured.CatalogAttempts)
 }
 
 // TestCommandLoadsEnvironmentOnlyValuesAndConfigSelector proves explicit env registration unmarshals.
@@ -49,6 +50,7 @@ func TestCommandLoadsEnvironmentOnlyValuesAndConfigSelector(t *testing.T) {
 	t.Setenv("SIMPLESTREAMS_S3_CONFIG", configPath)
 	t.Setenv("SIMPLESTREAMS_S3_BUCKET", "environment-bucket")
 	t.Setenv("SIMPLESTREAMS_S3_PREFIX", "private/incus")
+	t.Setenv("SIMPLESTREAMS_S3_CATALOG_ATTEMPTS", "7")
 	var captured config.Publish
 	command := NewCommand(func(
 		_ context.Context,
@@ -64,6 +66,7 @@ func TestCommandLoadsEnvironmentOnlyValuesAndConfigSelector(t *testing.T) {
 	assert.Equal(t, "environment-bucket", captured.S3.Bucket.String())
 	assert.Equal(t, "private/incus", captured.S3.Prefix.String())
 	assert.Equal(t, "From file", captured.ReleaseTitle)
+	assert.Equal(t, 7, captured.CatalogAttempts)
 }
 
 // TestCommandRejectsUnknownYAMLKeys proves selected configuration files are structurally strict.

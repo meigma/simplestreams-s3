@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	minIOCRC64Poly           = 0x9a6c_9329_ac4b_c9b5
-	minIOExpectedObjectCount = 4
+	minIOCRC64Poly                  = 0x9a6c_9329_ac4b_c9b5
+	minIOInitialObjectCount         = 4
+	minIOExistingCatalogObjectCount = 6
 )
 
 // TestPublishAndProxyProcess proves the complete Phase 2 procedure against one disposable MinIO instance.
@@ -43,7 +44,7 @@ func TestPublishAndProxyProcess(t *testing.T) {
 
 	keys, err := scenario.objectKeys()
 	require.NoError(t, err)
-	require.Len(t, keys, minIOExpectedObjectCount)
+	require.Len(t, keys, minIOInitialObjectCount)
 	assert.Equal(t, "streams/v1/index.json", keys[3])
 	assert.True(t, strings.HasPrefix(keys[0], "images/"))
 	assert.True(t, strings.HasPrefix(keys[1], "images/"))
@@ -73,8 +74,23 @@ func TestPublishAndProxyProcess(t *testing.T) {
 		MetadataPath: metadataPath,
 		DiskPath:     diskPath,
 	})
-	require.Error(t, err)
-	assert.Equal(t, failure.KindCatalogConflict, failure.KindOf(err))
+	require.NoError(t, err)
+	repeatedKeys, err := scenario.objectKeys()
+	require.NoError(t, err)
+	assert.Equal(t, keys, repeatedKeys)
+
+	secondOptions := testfixture.DefaultVMOptions()
+	secondOptions.CreationDate += 3600
+	secondMetadata, secondDisk := testfixture.WriteSplitVM(t, t.TempDir(), secondOptions)
+	secondResult, err := scenario.publisher.Publish(t.Context(), publish.Request{
+		MetadataPath: secondMetadata,
+		DiskPath:     secondDisk,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "202607181402", secondResult.VersionID.String())
+	updatedKeys, err := scenario.objectKeys()
+	require.NoError(t, err)
+	assert.Len(t, updatedKeys, minIOExistingCatalogObjectCount)
 
 	key, err := object.NewObjectKey("integration/create-only.json")
 	require.NoError(t, err)

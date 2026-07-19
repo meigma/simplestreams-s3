@@ -30,6 +30,9 @@ type SHA256Digest [sha256.Size]byte
 // CRC64NVME is an S3 full-object CRC-64/NVME checksum.
 type CRC64NVME uint64
 
+// CatalogRevision is an opaque storage revision used only for compare-and-swap.
+type CatalogRevision string
+
 // NewBucketName validates a general-purpose S3 bucket name.
 func NewBucketName(value string) (BucketName, error) {
 	trimmed := strings.TrimSpace(value)
@@ -103,6 +106,14 @@ func NewSHA256Digest(value []byte) (SHA256Digest, error) {
 // NewCRC64NVME constructs a checksum from a completed hash value.
 func NewCRC64NVME(value uint64) CRC64NVME { return CRC64NVME(value) }
 
+// NewCatalogRevision validates a non-empty opaque storage revision.
+func NewCatalogRevision(value string) (CatalogRevision, error) {
+	if value == "" || strings.TrimSpace(value) != value {
+		return "", errors.New("catalog revision must be a non-empty opaque value")
+	}
+	return CatalogRevision(value), nil
+}
+
 // DigestBytes calculates the SHA-256 identity of data.
 func DigestBytes(data []byte) SHA256Digest {
 	return SHA256Digest(sha256.Sum256(data))
@@ -148,3 +159,9 @@ func (digest SHA256Digest) Bytes() []byte { return append([]byte(nil), digest[:]
 
 // Uint64 returns the checksum for encoding at an adapter boundary.
 func (checksum CRC64NVME) Uint64() uint64 { return uint64(checksum) }
+
+// String returns the opaque revision exactly as supplied by storage.
+func (revision CatalogRevision) String() string { return string(revision) }
+
+// IsZero reports whether the revision represents a confirmed absent index.
+func (revision CatalogRevision) IsZero() bool { return revision == "" }

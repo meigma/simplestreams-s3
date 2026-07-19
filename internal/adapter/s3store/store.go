@@ -48,6 +48,7 @@ type Store struct {
 	uploader            *transfermanager.Client
 	bucket              object.BucketName
 	expectedBucketOwner *string
+	metrics             proxy.Metrics
 }
 
 // clientOptions are hidden integration hooks and do not extend production compatibility.
@@ -59,11 +60,29 @@ type clientOptions struct {
 
 // New constructs an AWS S3 adapter through the default credential and region chain.
 func New(ctx context.Context, runtime config.S3, catalogTimeout time.Duration) (*Store, error) {
+	return NewWithMetrics(ctx, runtime, catalogTimeout, proxy.NoopMetrics())
+}
+
+// NewWithMetrics constructs an AWS S3 adapter with the proxy metrics emission port.
+func NewWithMetrics(
+	ctx context.Context,
+	runtime config.S3,
+	catalogTimeout time.Duration,
+	metrics proxy.Metrics,
+) (*Store, error) {
 	testOptions, err := clientOptionsFromEnvironment()
 	if err != nil {
 		return nil, err
 	}
-	return newStore(ctx, runtime, catalogTimeout, testOptions)
+	store, err := newStore(ctx, runtime, catalogTimeout, testOptions)
+	if err != nil {
+		return nil, err
+	}
+	if metrics == nil {
+		metrics = proxy.NoopMetrics()
+	}
+	store.metrics = metrics
+	return store, nil
 }
 
 // clientOptionsFromEnvironment reads deliberately unsupported local integration hooks.
@@ -296,45 +315,104 @@ func (store *Store) Commit(
 }
 
 // Head performs an authenticated exact-key metadata read.
-func (store *Store) Head(ctx context.Context, key object.ObjectKey) (proxy.Attributes, error) {
+func (store *Store) Head(ctx context.Context, key object.ObjectKey, request proxy.Request) (proxy.Attributes, error) {
+	started := time.Now()
 	output, err := store.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket:              aws.String(store.bucket.String()),
 		Key:                 aws.String(key.String()),
 		ExpectedBucketOwner: store.expectedBucketOwner,
+		Range:               optionalString(request.Range),
+		IfMatch:             optionalString(request.IfMatch),
+		IfNoneMatch:         optionalString(request.IfNoneMatch),
+		IfModifiedSince:     request.IfModifiedSince,
+		IfUnmodifiedSince:   request.IfUnmodifiedSince,
 	})
 	if err != nil {
-		return proxy.Attributes{}, classify("head object", err)
+		classified := classify("head object", err)
+		store.metrics.RecordS3Request(ctx, "HeadObject", string(failure.KindOf(classified)), time.Since(started), 0)
+		return proxy.Attributes{}, classified
 	}
-	return attributes(output.ContentLength, output.ContentType, output.ETag, output.LastModified), nil
+	attributes := attributes(
+		output.ContentLength,
+		output.ContentType,
+		output.ETag,
+		output.LastModified,
+		output.ContentRange,
+		output.AcceptRanges,
+		output.CacheControl,
+		output.ContentDisposition,
+		output.ContentEncoding,
+		output.ExpiresString,
+	)
+	store.metrics.RecordS3Request(ctx, "HeadObject", "success", time.Since(started), 0)
+	return attributes, nil
 }
 
 // Get performs an authenticated exact-key streaming read.
-func (store *Store) Get(ctx context.Context, key object.ObjectKey) (proxy.Object, error) {
+func (store *Store) Get(ctx context.Context, key object.ObjectKey, request proxy.Request) (proxy.Object, error) {
+	started := time.Now()
 	output, err := store.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket:              aws.String(store.bucket.String()),
 		Key:                 aws.String(key.String()),
 		ExpectedBucketOwner: store.expectedBucketOwner,
+		Range:               optionalString(request.Range),
+		IfMatch:             optionalString(request.IfMatch),
+		IfNoneMatch:         optionalString(request.IfNoneMatch),
+		IfModifiedSince:     request.IfModifiedSince,
+		IfUnmodifiedSince:   request.IfUnmodifiedSince,
 	})
 	if err != nil {
-		return proxy.Object{}, classify("get object", err)
+		classified := classify("get object", err)
+		store.metrics.RecordS3Request(ctx, "GetObject", string(failure.KindOf(classified)), time.Since(started), 0)
+		return proxy.Object{}, classified
 	}
+	attributes := attributes(
+		output.ContentLength,
+		output.ContentType,
+		output.ETag,
+		output.LastModified,
+		output.ContentRange,
+		output.AcceptRanges,
+		output.CacheControl,
+		output.ContentDisposition,
+		output.ContentEncoding,
+		output.ExpiresString,
+	)
+	store.metrics.RecordS3Request(ctx, "GetObject", "success", time.Since(started), attributes.Size.Int64())
 	return proxy.Object{
-		Attributes: attributes(output.ContentLength, output.ContentType, output.ETag, output.LastModified),
+		Attributes: attributes,
 		Body:       output.Body,
 	}, nil
 }
 
 // attributes maps AWS output fields into the proxy port model.
-func attributes(size *int64, contentType *string, etag *string, modified *time.Time) proxy.Attributes {
+func attributes(
+	size *int64,
+	contentType *string,
+	etag *string,
+	modified *time.Time,
+	contentRange *string,
+	acceptRanges *string,
+	cacheControl *string,
+	contentDisposition *string,
+	contentEncoding *string,
+	expires *string,
+) proxy.Attributes {
 	byteSize, err := object.NewByteSize(aws.ToInt64(size))
 	if err != nil {
 		byteSize = 0
 	}
 	return proxy.Attributes{
-		Size:         byteSize,
-		ContentType:  aws.ToString(contentType),
-		ETag:         aws.ToString(etag),
-		LastModified: aws.ToTime(modified),
+		Size:               byteSize,
+		ContentType:        aws.ToString(contentType),
+		ETag:               aws.ToString(etag),
+		LastModified:       aws.ToTime(modified),
+		ContentRange:       aws.ToString(contentRange),
+		AcceptRanges:       aws.ToString(acceptRanges),
+		CacheControl:       aws.ToString(cacheControl),
+		ContentDisposition: aws.ToString(contentDisposition),
+		ContentEncoding:    aws.ToString(contentEncoding),
+		Expires:            aws.ToString(expires),
 	}
 }
 
@@ -471,6 +549,10 @@ func classify(operation string, err error) error {
 		switch apiError.ErrorCode() {
 		case "AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch":
 			return failure.Wrap(failure.KindUnauthorized, operation, err)
+		case "NotModified", "304":
+			return failure.Wrap(failure.KindNotModified, operation, err)
+		case "InvalidRange", "RequestedRangeNotSatisfiable":
+			return failure.Wrap(failure.KindRangeNotSatisfiable, operation, err)
 		case "PreconditionFailed", "ConditionalRequestConflict":
 			return failure.Wrap(failure.KindPrecondition, operation, err)
 		case "RequestTimeout", "RequestTimeoutException":

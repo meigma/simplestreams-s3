@@ -32,6 +32,16 @@ func TestClassifyTranslatesOperationalFailures(t *testing.T) {
 			kind: failure.KindPrecondition,
 		},
 		{
+			name: "not modified",
+			err:  &smithy.GenericAPIError{Code: "NotModified", Message: "unchanged"},
+			kind: failure.KindNotModified,
+		},
+		{
+			name: "unsatisfiable range",
+			err:  &smithy.GenericAPIError{Code: "InvalidRange", Message: "outside object"},
+			kind: failure.KindRangeNotSatisfiable,
+		},
+		{
 			name: "request timeout",
 			err:  &smithy.GenericAPIError{Code: "RequestTimeout", Message: "timed out"},
 			kind: failure.KindDeadline,

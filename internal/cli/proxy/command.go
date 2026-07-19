@@ -36,6 +36,25 @@ func NewCommand(run Runner) *cobra.Command {
 	addConfigFlag(command.Flags())
 	addS3Flags(command.Flags())
 	command.Flags().String("listen", ":8080", "plain-HTTP listener address")
+	command.Flags().Int("max-streams", config.DefaultProxyMaxStreams, "maximum concurrent S3-backed object streams")
+	command.Flags().
+		Duration("read-header-timeout", config.DefaultProxyReadHeaderTimeout, "client request header timeout")
+	command.Flags().Duration("idle-timeout", config.DefaultProxyIdleTimeout, "idle keep-alive connection timeout")
+	command.Flags().
+		Duration("upstream-idle-timeout", config.DefaultProxyUpstreamIdleTimeout, "upstream stream no-progress timeout")
+	command.Flags().
+		Duration("write-idle-timeout", config.DefaultProxyWriteIdleTimeout, "downstream write no-progress timeout")
+	command.Flags().Int("max-header-bytes", config.DefaultProxyMaxHeaderBytes, "maximum client request header bytes")
+	command.Flags().
+		Duration("shutdown-delay", config.DefaultProxyShutdownDelay, "readiness propagation delay before shutdown")
+	command.Flags().Duration("shutdown-grace", config.DefaultProxyShutdownGrace, "graceful stream drain timeout")
+	command.Flags().
+		Duration("readiness-interval", config.DefaultProxyReadinessInterval, "catalog readiness probe interval")
+	command.Flags().
+		Duration("readiness-timeout", config.DefaultProxyReadinessTimeout, "catalog readiness probe timeout")
+	command.Flags().
+		Duration("readiness-staleness", config.DefaultProxyReadinessStaleness, "maximum age of successful readiness probe")
+	command.Flags().String("log-level", "info", "proxy JSON logging level")
 	return command
 }
 

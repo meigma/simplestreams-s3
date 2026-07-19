@@ -48,18 +48,18 @@ type Runtime struct {
 
 // metricSet implements the proxy metrics port with fixed instruments and attributes.
 type metricSet struct {
-	requestDuration otelmetric.Float64Histogram
-	responseBody    otelmetric.Int64Histogram
-	s3Duration      otelmetric.Float64Histogram
-	s3Requests      otelmetric.Int64Counter
-	s3Retries       otelmetric.Int64Counter
-	s3Transferred   otelmetric.Int64Counter
-	streamsRejected otelmetric.Int64Counter
-	streamsComplete otelmetric.Int64Counter
-	activeStreams   atomic.Int64
-	readiness       atomic.Int64
-	readinessMu     sync.RWMutex
-	readinessReason string
+	requestDuration   otelmetric.Float64Histogram
+	responseBody      otelmetric.Int64Histogram
+	s3Duration        otelmetric.Float64Histogram
+	s3Requests        otelmetric.Int64Counter
+	s3Retries         otelmetric.Int64Counter
+	s3Transferred     otelmetric.Int64Counter
+	streamsRejected   otelmetric.Int64Counter
+	streamsIncomplete otelmetric.Int64Counter
+	activeStreams     atomic.Int64
+	readiness         atomic.Int64
+	readinessMu       sync.RWMutex
+	readinessReason   string
 }
 
 // warningExporter decorates OTLP export with sanitized rate-limited warnings.
@@ -192,7 +192,7 @@ func newMetricSet(meter otelmetric.Meter) (*metricSet, error) {
 		"{stream}",
 		errs,
 	)
-	metrics.streamsComplete, errs = int64Counter(
+	metrics.streamsIncomplete, errs = int64Counter(
 		meter,
 		"simplestreams_s3.streams.incomplete",
 		"Object streams terminated before completion.",
@@ -306,7 +306,7 @@ func (metrics *metricSet) RecordActiveStreams(_ context.Context, count int) {
 
 // RecordIncompleteStream observes one response terminated after headers were sent.
 func (metrics *metricSet) RecordIncompleteStream(ctx context.Context) {
-	metrics.streamsComplete.Add(ctx, 1)
+	metrics.streamsIncomplete.Add(ctx, 1)
 }
 
 // RecordReadiness stores the latest bounded readiness state and reason.

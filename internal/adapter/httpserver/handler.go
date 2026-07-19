@@ -63,7 +63,7 @@ type errorBody struct {
 	RequestID string `json:"request_id"`
 }
 
-// NewHandler constructs an HTTP adapter with normative Phase 4 defaults.
+// NewHandler constructs an HTTP adapter with normative production defaults.
 func NewHandler(service *proxy.Service) *Handler {
 	return NewHandlerWithOptions(service, Options{MaxStreams: defaultMaxStreams})
 }

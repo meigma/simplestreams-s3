@@ -103,12 +103,13 @@ func serveProxy(ctx context.Context, runtime config.Proxy) error {
 		return err
 	}
 	service := applicationproxy.NewService(store, runtime.S3.Prefix)
-	readiness := httpserver.NewReadinessWithMetrics(
+	readiness := httpserver.NewReadinessWithObservers(
 		service.Probe,
 		runtime.ReadinessInterval,
 		runtime.ReadinessTimeout,
 		runtime.ReadinessStaleness,
 		metrics,
+		logger,
 	)
 	handler := httpserver.NewHandlerWithOptions(service, httpserver.Options{
 		MaxStreams:          runtime.MaxStreams,

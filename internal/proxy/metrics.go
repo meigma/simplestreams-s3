@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Metrics records Phase 4 proxy emission points without coupling request behavior to an exporter.
+// Metrics records proxy emission points without coupling request behavior to an exporter.
 type Metrics interface {
 	// RecordRequest observes one completed HTTP request.
 	RecordRequest(context.Context, RequestMetric)
@@ -60,7 +60,7 @@ type S3Metric struct {
 // NoopMetrics constructs metrics that preserve all call sites without exporting data.
 func NoopMetrics() Metrics { return noopMetrics{} }
 
-// noopMetrics deliberately discards Phase 4 emission points until Phase 5 wires OTLP.
+// noopMetrics deliberately discards emission points when telemetry is disabled.
 type noopMetrics struct{}
 
 // RecordRequest discards one request observation.

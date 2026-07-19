@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -9,7 +10,10 @@ import (
 	"github.com/meigma/simplestreams-s3/internal/proxy"
 )
 
-const unavailableReason = "s3_unavailable"
+const (
+	drainingReason    = "draining"
+	unavailableReason = "s3_unavailable"
+)
 
 // Readiness tracks cached catalog-probe state without making HTTP handlers wait on S3.
 type Readiness struct {
@@ -18,11 +22,16 @@ type Readiness struct {
 	timeout   time.Duration
 	staleness time.Duration
 	metrics   proxy.Metrics
+	logger    *slog.Logger
 
 	mu          sync.RWMutex
 	lastSuccess time.Time
 	reason      string
 	draining    bool
+
+	transitionMu     sync.Mutex
+	transitionReady  bool
+	transitionReason string
 }
 
 // NewReadiness constructs a cached readiness checker for one authenticated catalog probe.
@@ -32,7 +41,7 @@ func NewReadiness(
 	timeout time.Duration,
 	staleness time.Duration,
 ) *Readiness {
-	return NewReadinessWithMetrics(probe, interval, timeout, staleness, proxy.NoopMetrics())
+	return NewReadinessWithObservers(probe, interval, timeout, staleness, proxy.NoopMetrics(), nil)
 }
 
 // NewReadinessWithMetrics constructs a cached readiness checker with optional metric emission.
@@ -43,11 +52,28 @@ func NewReadinessWithMetrics(
 	staleness time.Duration,
 	metrics proxy.Metrics,
 ) *Readiness {
+	return NewReadinessWithObservers(probe, interval, timeout, staleness, metrics, nil)
+}
+
+// NewReadinessWithObservers constructs a cached checker with metric and transition-log adapters.
+func NewReadinessWithObservers(
+	probe func(context.Context) error,
+	interval time.Duration,
+	timeout time.Duration,
+	staleness time.Duration,
+	metrics proxy.Metrics,
+	logger *slog.Logger,
+) *Readiness {
 	if metrics == nil {
 		metrics = proxy.NoopMetrics()
 	}
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	return &Readiness{
-		probe: probe, interval: interval, timeout: timeout, staleness: staleness, metrics: metrics, reason: "starting",
+		probe: probe, interval: interval, timeout: timeout, staleness: staleness,
+		metrics: metrics, logger: logger.With("component", "readiness"),
+		reason: "starting", transitionReason: "starting",
 	}
 }
 
@@ -77,7 +103,7 @@ func (readiness *Readiness) Status(now time.Time) (bool, string) {
 	readiness.mu.RLock()
 	defer readiness.mu.RUnlock()
 	if readiness.draining {
-		return false, "draining"
+		return false, drainingReason
 	}
 	if !readiness.lastSuccess.IsZero() && now.Sub(readiness.lastSuccess) <= readiness.staleness {
 		return true, ""
@@ -92,9 +118,10 @@ func (readiness *Readiness) SetDraining() {
 	}
 	readiness.mu.Lock()
 	readiness.draining = true
-	readiness.reason = "draining"
+	readiness.reason = drainingReason
 	readiness.mu.Unlock()
-	readiness.metrics.RecordReadiness(context.Background(), false, "draining")
+	readiness.metrics.RecordReadiness(context.Background(), false, drainingReason)
+	readiness.logTransition(false, drainingReason)
 }
 
 // check runs one bounded probe and updates only cached state.
@@ -104,10 +131,13 @@ func (readiness *Readiness) check(parent context.Context) {
 	cancel()
 	readiness.mu.Lock()
 	if err == nil {
-		readiness.lastSuccess = time.Now()
+		now := time.Now()
+		readiness.lastSuccess = now
 		readiness.reason = ""
+		ready, reason := readiness.stateLocked(now)
 		readiness.mu.Unlock()
-		readiness.metrics.RecordReadiness(parent, true, "")
+		readiness.metrics.RecordReadiness(parent, ready, reason)
+		readiness.logTransition(ready, reason)
 		return
 	}
 	switch failure.KindOf(err) {
@@ -130,7 +160,44 @@ func (readiness *Readiness) check(parent context.Context) {
 		failure.KindInternal:
 		readiness.reason = unavailableReason
 	}
-	reason := readiness.reason
+	ready, reason := readiness.stateLocked(time.Now())
 	readiness.mu.Unlock()
-	readiness.metrics.RecordReadiness(parent, false, reason)
+	metricReason := reason
+	if ready {
+		metricReason = ""
+	}
+	readiness.metrics.RecordReadiness(parent, ready, metricReason)
+	readiness.logTransition(ready, metricReason)
+}
+
+// stateLocked returns the externally visible cached state while the caller holds the mutex.
+func (readiness *Readiness) stateLocked(now time.Time) (bool, string) {
+	if readiness.draining {
+		return false, drainingReason
+	}
+	if !readiness.lastSuccess.IsZero() && now.Sub(readiness.lastSuccess) <= readiness.staleness {
+		return true, ""
+	}
+	return false, readiness.reason
+}
+
+// logTransition emits one bounded record only when reported readiness changes.
+func (readiness *Readiness) logTransition(ready bool, reason string) {
+	readiness.transitionMu.Lock()
+	if readiness.transitionReady == ready && readiness.transitionReason == reason {
+		readiness.transitionMu.Unlock()
+		return
+	}
+	readiness.transitionReady = ready
+	readiness.transitionReason = reason
+	readiness.transitionMu.Unlock()
+	readiness.logger.Info(
+		"readiness transition",
+		"event",
+		"readiness_transition",
+		"ready",
+		ready,
+		"reason",
+		reason,
+	)
 }

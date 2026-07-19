@@ -322,18 +322,55 @@ func TestHandlerEmitsStandardMetricsForEveryRouteClass(t *testing.T) {
 // TestReadinessEmitsProbeResults proves metrics follow background S3 checks instead of endpoint traffic.
 func TestReadinessEmitsProbeResults(t *testing.T) {
 	metrics := new(recordingMetrics)
-	readiness := NewReadinessWithMetrics(
+	var output bytes.Buffer
+	readiness := NewReadinessWithObservers(
 		func(context.Context) error { return failure.New(failure.KindUnavailable, "probe", "unavailable") },
 		time.Hour,
 		time.Second,
 		time.Second,
 		metrics,
+		slog.New(slog.NewJSONHandler(&output, nil)),
 	)
 	readiness.check(t.Context())
 
 	require.Len(t, metrics.readiness, 1)
 	assert.False(t, metrics.readiness[0].ready)
 	assert.Equal(t, "s3_unavailable", metrics.readiness[0].reason)
+	assert.Contains(t, output.String(), `"event":"readiness_transition"`)
+}
+
+// TestReadinessObserversTrackVisibleState proves staleness and draining cannot report false transitions.
+func TestReadinessObserversTrackVisibleState(t *testing.T) {
+	metrics := new(recordingMetrics)
+	var output bytes.Buffer
+	probeErr := error(nil)
+	readiness := NewReadinessWithObservers(
+		func(context.Context) error { return probeErr },
+		time.Hour,
+		time.Second,
+		time.Minute,
+		metrics,
+		slog.New(slog.NewJSONHandler(&output, nil)),
+	)
+
+	readiness.check(t.Context())
+	probeErr = failure.New(failure.KindUnavailable, "probe", "unavailable")
+	readiness.check(t.Context())
+	assert.Equal(t, []readinessMetric{{ready: true}, {ready: true}}, metrics.readiness)
+	assert.Equal(t, 1, strings.Count(output.String(), `"event":"readiness_transition"`))
+
+	readiness.mu.Lock()
+	readiness.lastSuccess = time.Now().Add(-2 * time.Minute)
+	readiness.mu.Unlock()
+	readiness.check(t.Context())
+	assert.Equal(t, readinessMetric{ready: false, reason: unavailableReason}, metrics.readiness[2])
+	assert.Equal(t, 2, strings.Count(output.String(), `"event":"readiness_transition"`))
+
+	readiness.SetDraining()
+	probeErr = nil
+	readiness.check(t.Context())
+	assert.Equal(t, readinessMetric{ready: false, reason: drainingReason}, metrics.readiness[4])
+	assert.Equal(t, 3, strings.Count(output.String(), `"event":"readiness_transition"`))
 }
 
 // TestHandlerRejectsSaturatedStreamsImmediately proves proxy requests never wait in an unbounded queue.

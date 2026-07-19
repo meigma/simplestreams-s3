@@ -259,7 +259,7 @@ func LoadPublish(command *cobra.Command, vp *viper.Viper) (Publish, error) {
 	}, nil
 }
 
-// LoadProxy resolves and validates the Phase 2 proxy configuration.
+// LoadProxy resolves and validates the production proxy configuration.
 func LoadProxy(command *cobra.Command, vp *viper.Viper) (Proxy, error) {
 	bindings := append(s3Bindings(), proxyBindings()...)
 	bindings = append(bindings, loggingBindings()...)

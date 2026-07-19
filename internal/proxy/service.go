@@ -25,6 +25,32 @@ type Attributes struct {
 	ETag string
 	// LastModified is the object modification time when available.
 	LastModified time.Time
+	// ContentRange describes a returned byte range when present.
+	ContentRange string
+	// AcceptRanges declares supported byte-range units when present.
+	AcceptRanges string
+	// CacheControl is the stored cache-control policy when present.
+	CacheControl string
+	// ContentDisposition is the stored presentation directive when present.
+	ContentDisposition string
+	// ContentEncoding is the stored content encoding when present.
+	ContentEncoding string
+	// Expires is the stored HTTP expiry time when present.
+	Expires time.Time
+}
+
+// Request describes one transport-neutral conditional object read.
+type Request struct {
+	// Range is one syntactically valid HTTP bytes range or empty for the full object.
+	Range string
+	// IfMatch is the validated entity-tag condition when present.
+	IfMatch string
+	// IfNoneMatch is the validated entity-tag condition when present.
+	IfNoneMatch string
+	// IfModifiedSince is the validated modification-time condition when present.
+	IfModifiedSince *time.Time
+	// IfUnmodifiedSince is the validated modification-time condition when present.
+	IfUnmodifiedSince *time.Time
 }
 
 // Object is a streaming object read and its response attributes.
@@ -37,8 +63,8 @@ type Object struct {
 
 // Reader is the consumer-owned object read port needed by the Phase 2 proxy.
 type Reader interface {
-	Head(context.Context, object.ObjectKey) (Attributes, error)
-	Get(context.Context, object.ObjectKey) (Object, error)
+	Head(context.Context, object.ObjectKey, Request) (Attributes, error)
+	Get(context.Context, object.ObjectKey, Request) (Object, error)
 }
 
 // Service maps exact HTTP paths to authenticated object reads.
@@ -53,21 +79,21 @@ func NewService(reader Reader, prefix object.KeyPrefix) *Service {
 }
 
 // Head validates escapedPath and performs one exact object metadata read.
-func (service *Service) Head(ctx context.Context, escapedPath string) (Attributes, error) {
+func (service *Service) Head(ctx context.Context, escapedPath string, request Request) (Attributes, error) {
 	key, err := service.key(escapedPath)
 	if err != nil {
 		return Attributes{}, err
 	}
-	return service.reader.Head(ctx, key)
+	return service.reader.Head(ctx, key, request)
 }
 
 // Get validates escapedPath and performs one exact streaming object read.
-func (service *Service) Get(ctx context.Context, escapedPath string) (Object, error) {
+func (service *Service) Get(ctx context.Context, escapedPath string, request Request) (Object, error) {
 	key, err := service.key(escapedPath)
 	if err != nil {
 		return Object{}, err
 	}
-	return service.reader.Get(ctx, key)
+	return service.reader.Get(ctx, key, request)
 }
 
 // key validates an escaped HTTP path without cleaning or rewriting it.

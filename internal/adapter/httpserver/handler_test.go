@@ -24,7 +24,7 @@ type fakeHTTPReader struct {
 }
 
 // Head returns fixed response attributes or the configured failure.
-func (reader *fakeHTTPReader) Head(_ context.Context, _ object.ObjectKey) (proxy.Attributes, error) {
+func (reader *fakeHTTPReader) Head(_ context.Context, _ object.ObjectKey, _ proxy.Request) (proxy.Attributes, error) {
 	reader.headCalls++
 	if reader.err != nil {
 		return proxy.Attributes{}, reader.err
@@ -34,7 +34,7 @@ func (reader *fakeHTTPReader) Head(_ context.Context, _ object.ObjectKey) (proxy
 }
 
 // Get returns a fixed exact response body or the configured failure.
-func (reader *fakeHTTPReader) Get(_ context.Context, _ object.ObjectKey) (proxy.Object, error) {
+func (reader *fakeHTTPReader) Get(_ context.Context, _ object.ObjectKey, _ proxy.Request) (proxy.Object, error) {
 	reader.getCalls++
 	if reader.err != nil {
 		return proxy.Object{}, reader.err
@@ -73,13 +73,17 @@ func TestHandlerSanitizesErrorsAndReservesHealthRoutes(t *testing.T) {
 	handler := NewHandler(proxy.NewService(reader, ""))
 
 	missing := httptest.NewRecorder()
-	handler.ServeHTTP(missing, httptest.NewRequest(http.MethodGet, "/missing", nil))
+	missingRequest := httptest.NewRequest(http.MethodGet, "/missing", nil)
+	missingRequest.Header.Set("X-Request-ID", "request-1")
+	handler.ServeHTTP(missing, missingRequest)
 	assert.Equal(t, http.StatusNotFound, missing.Code)
-	assert.JSONEq(t, `{"code":"not_found"}`, missing.Body.String())
+	assert.JSONEq(t, `{"code":"not_found","request_id":"request-1"}`, missing.Body.String())
+	assert.Equal(t, "request-1", missing.Header().Get("X-Request-ID"))
 	assert.NotContains(t, missing.Body.String(), "secret-bucket")
 
 	health := httptest.NewRecorder()
-	handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	healthRequest := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	handler.ServeHTTP(health, healthRequest)
 	assert.Equal(t, http.StatusOK, health.Code)
 	assert.Zero(t, reader.headCalls)
 	require.Equal(t, 1, reader.getCalls)

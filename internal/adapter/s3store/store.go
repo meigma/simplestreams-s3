@@ -296,45 +296,94 @@ func (store *Store) Commit(
 }
 
 // Head performs an authenticated exact-key metadata read.
-func (store *Store) Head(ctx context.Context, key object.ObjectKey) (proxy.Attributes, error) {
+func (store *Store) Head(ctx context.Context, key object.ObjectKey, request proxy.Request) (proxy.Attributes, error) {
 	output, err := store.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket:              aws.String(store.bucket.String()),
 		Key:                 aws.String(key.String()),
 		ExpectedBucketOwner: store.expectedBucketOwner,
+		Range:               optionalString(request.Range),
+		IfMatch:             optionalString(request.IfMatch),
+		IfNoneMatch:         optionalString(request.IfNoneMatch),
+		IfModifiedSince:     request.IfModifiedSince,
+		IfUnmodifiedSince:   request.IfUnmodifiedSince,
 	})
 	if err != nil {
 		return proxy.Attributes{}, classify("head object", err)
 	}
-	return attributes(output.ContentLength, output.ContentType, output.ETag, output.LastModified), nil
+	return attributes(
+		output.ContentLength,
+		output.ContentType,
+		output.ETag,
+		output.LastModified,
+		output.ContentRange,
+		output.AcceptRanges,
+		output.CacheControl,
+		output.ContentDisposition,
+		output.ContentEncoding,
+		output.Expires,
+	), nil
 }
 
 // Get performs an authenticated exact-key streaming read.
-func (store *Store) Get(ctx context.Context, key object.ObjectKey) (proxy.Object, error) {
+func (store *Store) Get(ctx context.Context, key object.ObjectKey, request proxy.Request) (proxy.Object, error) {
 	output, err := store.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket:              aws.String(store.bucket.String()),
 		Key:                 aws.String(key.String()),
 		ExpectedBucketOwner: store.expectedBucketOwner,
+		Range:               optionalString(request.Range),
+		IfMatch:             optionalString(request.IfMatch),
+		IfNoneMatch:         optionalString(request.IfNoneMatch),
+		IfModifiedSince:     request.IfModifiedSince,
+		IfUnmodifiedSince:   request.IfUnmodifiedSince,
 	})
 	if err != nil {
 		return proxy.Object{}, classify("get object", err)
 	}
 	return proxy.Object{
-		Attributes: attributes(output.ContentLength, output.ContentType, output.ETag, output.LastModified),
-		Body:       output.Body,
+		Attributes: attributes(
+			output.ContentLength,
+			output.ContentType,
+			output.ETag,
+			output.LastModified,
+			output.ContentRange,
+			output.AcceptRanges,
+			output.CacheControl,
+			output.ContentDisposition,
+			output.ContentEncoding,
+			output.Expires,
+		),
+		Body: output.Body,
 	}, nil
 }
 
 // attributes maps AWS output fields into the proxy port model.
-func attributes(size *int64, contentType *string, etag *string, modified *time.Time) proxy.Attributes {
+func attributes(
+	size *int64,
+	contentType *string,
+	etag *string,
+	modified *time.Time,
+	contentRange *string,
+	acceptRanges *string,
+	cacheControl *string,
+	contentDisposition *string,
+	contentEncoding *string,
+	expires *time.Time,
+) proxy.Attributes {
 	byteSize, err := object.NewByteSize(aws.ToInt64(size))
 	if err != nil {
 		byteSize = 0
 	}
 	return proxy.Attributes{
-		Size:         byteSize,
-		ContentType:  aws.ToString(contentType),
-		ETag:         aws.ToString(etag),
-		LastModified: aws.ToTime(modified),
+		Size:               byteSize,
+		ContentType:        aws.ToString(contentType),
+		ETag:               aws.ToString(etag),
+		LastModified:       aws.ToTime(modified),
+		ContentRange:       aws.ToString(contentRange),
+		AcceptRanges:       aws.ToString(acceptRanges),
+		CacheControl:       aws.ToString(cacheControl),
+		ContentDisposition: aws.ToString(contentDisposition),
+		ContentEncoding:    aws.ToString(contentEncoding),
+		Expires:            aws.ToTime(expires),
 	}
 }
 

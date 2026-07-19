@@ -26,6 +26,10 @@ const (
 	KindCatalogConflict Kind = "catalog_conflict"
 	// KindPrecondition identifies a failed conditional operation.
 	KindPrecondition Kind = "precondition_failed"
+	// KindNotModified identifies a conditional read whose representation is unchanged.
+	KindNotModified Kind = "not_modified"
+	// KindRangeNotSatisfiable identifies a valid byte range outside an object.
+	KindRangeNotSatisfiable Kind = "range_not_satisfiable"
 	// KindUnavailable identifies a transient upstream failure.
 	KindUnavailable Kind = "unavailable"
 	// KindDeadline identifies an exhausted operation deadline.

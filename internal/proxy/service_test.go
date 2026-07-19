@@ -19,14 +19,14 @@ type recordingReader struct {
 }
 
 // Head records the exact key and returns fixed attributes.
-func (reader *recordingReader) Head(_ context.Context, key object.ObjectKey) (Attributes, error) {
+func (reader *recordingReader) Head(_ context.Context, key object.ObjectKey, _ Request) (Attributes, error) {
 	reader.key = key
 	size, _ := object.NewByteSize(7)
 	return Attributes{Size: size}, nil
 }
 
 // Get records the exact key and returns a fixed streaming object.
-func (reader *recordingReader) Get(_ context.Context, key object.ObjectKey) (Object, error) {
+func (reader *recordingReader) Get(_ context.Context, key object.ObjectKey, _ Request) (Object, error) {
 	reader.key = key
 	size, _ := object.NewByteSize(7)
 	return Object{Attributes: Attributes{Size: size}, Body: io.NopCloser(strings.NewReader("catalog"))}, nil
@@ -40,7 +40,7 @@ func TestServiceMapsOneExactValidatedPath(t *testing.T) {
 	reader := &recordingReader{}
 	service := NewService(reader, prefix)
 
-	result, err := service.Get(context.Background(), "/streams/v1/index.json")
+	result, err := service.Get(context.Background(), "/streams/v1/index.json", Request{})
 	require.NoError(t, err)
 	require.NoError(t, result.Body.Close())
 	assert.Equal(t, "private/incus/streams/v1/index.json", reader.key.String())
@@ -65,7 +65,7 @@ func TestServiceRejectsUnsafePathsRatherThanCleaningThem(t *testing.T) {
 	for _, escapedPath := range tests {
 		t.Run(escapedPath, func(t *testing.T) {
 			t.Parallel()
-			_, err := service.Head(context.Background(), escapedPath)
+			_, err := service.Head(context.Background(), escapedPath, Request{})
 			require.Error(t, err)
 			assert.Equal(t, failure.KindInvalidInput, failure.KindOf(err))
 		})

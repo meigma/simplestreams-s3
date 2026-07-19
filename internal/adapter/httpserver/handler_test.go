@@ -1,12 +1,18 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,6 +34,89 @@ type fakeHTTPReader struct {
 type blockingHTTPReader struct {
 	started chan struct{}
 	release chan struct{}
+}
+
+// failingHTTPReader returns one partial body followed by an upstream read failure.
+type failingHTTPReader struct{}
+
+// stalledHTTPReader returns a body that makes no upstream progress until the handler closes it.
+type stalledHTTPReader struct{}
+
+// lockedBuffer makes concurrent lifecycle-log assertions race-safe.
+type lockedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+// Write appends one log fragment safely.
+func (buffer *lockedBuffer) Write(data []byte) (int, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.Write(data)
+}
+
+// String returns a stable snapshot of recorded log output.
+func (buffer *lockedBuffer) String() string {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.String()
+}
+
+// Head returns an unused fixed representation.
+func (failingHTTPReader) Head(context.Context, object.ObjectKey, proxy.Request) (proxy.Attributes, error) {
+	size, _ := object.NewByteSize(7)
+	return proxy.Attributes{Size: size}, nil
+}
+
+// Get returns a body that fails after its first response bytes have been written.
+func (failingHTTPReader) Get(context.Context, object.ObjectKey, proxy.Request) (proxy.Object, error) {
+	size, _ := object.NewByteSize(7)
+	return proxy.Object{
+		Attributes: proxy.Attributes{Size: size},
+		Body:       io.NopCloser(&failingBody{}),
+	}, nil
+}
+
+// Head returns an unused fixed representation.
+func (stalledHTTPReader) Head(context.Context, object.ObjectKey, proxy.Request) (proxy.Attributes, error) {
+	size, _ := object.NewByteSize(7)
+	return proxy.Attributes{Size: size}, nil
+}
+
+// Get returns an upstream body that only unblocks when its owner closes it.
+func (stalledHTTPReader) Get(context.Context, object.ObjectKey, proxy.Request) (proxy.Object, error) {
+	size, _ := object.NewByteSize(7)
+	return proxy.Object{Attributes: proxy.Attributes{Size: size}, Body: &stalledBody{closed: make(chan struct{})}}, nil
+}
+
+// failingBody supplies one chunk before simulating a broken upstream transfer.
+type failingBody struct{ sent bool }
+
+// stalledBody models an upstream that stops producing bytes forever.
+type stalledBody struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+// Read blocks until Close interrupts the stalled upstream response.
+func (body *stalledBody) Read([]byte) (int, error) {
+	<-body.closed
+	return 0, context.Canceled
+}
+
+// Close interrupts the blocked Read exactly once.
+func (body *stalledBody) Close() error {
+	body.once.Do(func() { close(body.closed) })
+	return nil
+}
+
+// Read returns one partial chunk and then a deterministic upstream failure.
+func (body *failingBody) Read(buffer []byte) (int, error) {
+	if body.sent {
+		return 0, errors.New("upstream interrupted")
+	}
+	body.sent = true
+	return copy(buffer, "partial"), nil
 }
 
 // Head returns an unused fixed representation.
@@ -189,6 +278,89 @@ func TestHandlerRejectsSaturatedStreamsImmediately(t *testing.T) {
 	assert.Equal(t, "1", second.Header().Get("Retry-After"))
 	close(reader.release)
 	<-firstDone
+}
+
+// TestHandlerAbortsTheConnectionAfterMidStreamFailure proves object bytes are never followed by an error document.
+func TestHandlerAbortsTheConnectionAfterMidStreamFailure(t *testing.T) {
+	t.Parallel()
+	handler := NewHandler(proxy.NewService(failingHTTPReader{}, ""))
+	response := httptest.NewRecorder()
+
+	assert.PanicsWithValue(t, http.ErrAbortHandler, func() {
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/streams/v1/index.json", nil))
+	})
+	assert.Equal(t, "partial", response.Body.String())
+	assert.NotContains(t, response.Body.String(), "internal_failure")
+}
+
+// TestHandlerAbortsStalledUpstreams proves the upstream idle bound cancels a no-progress body.
+func TestHandlerAbortsStalledUpstreams(t *testing.T) {
+	t.Parallel()
+	handler := NewHandlerWithOptions(proxy.NewService(stalledHTTPReader{}, ""), Options{
+		UpstreamIdleTimeout: 20 * time.Millisecond,
+	})
+
+	assert.PanicsWithValue(t, http.ErrAbortHandler, func() {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/streams/v1/index.json", nil))
+	})
+}
+
+// TestServerDrainsOnCancellation proves shutdown marks readiness unavailable and keeps lifecycle logs structured.
+func TestServerDrainsOnCancellation(t *testing.T) {
+	t.Parallel()
+	var output lockedBuffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	readiness := NewReadiness(func(context.Context) error { return nil }, time.Hour, time.Second, time.Second)
+	server := NewServerWithOptions(
+		"127.0.0.1:0",
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		ServerOptions{
+			Readiness:     readiness,
+			ShutdownGrace: time.Second,
+			Logger:        logger,
+		},
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- server.Run(ctx) }()
+
+	require.Eventually(
+		t,
+		func() bool { return strings.Contains(output.String(), "server_listening") },
+		time.Second,
+		5*time.Millisecond,
+	)
+	cancel()
+	require.NoError(t, <-result)
+	ready, reason := readiness.Status(time.Now())
+	assert.False(t, ready)
+	assert.Equal(t, "draining", reason)
+	assert.Contains(t, output.String(), `"component":"httpserver"`)
+	assert.NotContains(t, output.String(), `"component":"httpserver","component":"httpserver"`)
+}
+
+// TestHandlerWritesOneSanitizedJSONCompletionRecord proves access logs include only bounded request fields.
+func TestHandlerWritesOneSanitizedJSONCompletionRecord(t *testing.T) {
+	t.Parallel()
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil)).With(
+		"service.name", "simplestreams-s3",
+		"service.version", "test",
+	)
+	handler := NewHandlerWithOptions(proxy.NewService(&fakeHTTPReader{}, ""), Options{Logger: logger})
+	request := httptest.NewRequest(http.MethodGet, "/streams/v1/index.json?ignored=key", nil)
+	request.Header.Set("X-Request-ID", "safe-request-id")
+
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+
+	var record map[string]any
+	require.NoError(t, json.Unmarshal(output.Bytes(), &record))
+	assert.Equal(t, "request completed", record["msg"])
+	assert.Equal(t, "safe-request-id", record["request_id"])
+	assert.Equal(t, "object", record["http.route"])
+	assert.Equal(t, "httpserver", record["component"])
+	assert.Contains(t, record, "duration_ms")
+	assert.NotContains(t, output.String(), "streams/v1/index.json")
 }
 
 // TestHandlerStreamsGETAndMapsHEADWithoutBodies proves the thin Phase 2 HTTP contract.

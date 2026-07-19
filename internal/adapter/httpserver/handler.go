@@ -9,9 +9,11 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/meigma/simplestreams-s3/internal/failure"
@@ -74,6 +76,7 @@ func NewHandlerWithOptions(service *proxy.Service, options Options) *Handler {
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.DiscardHandler)
 	}
+	options.Logger = options.Logger.With("component", "httpserver")
 	if options.Metrics == nil {
 		options.Metrics = proxy.NoopMetrics()
 	}
@@ -291,7 +294,7 @@ func (handler *Handler) get(
 			readRequest.Range != "",
 			started,
 		)
-		return
+		panic(http.ErrAbortHandler)
 	}
 	handler.record(request.Context(), requestID, request.Method, status, written, "", readRequest.Range != "", started)
 }
@@ -305,7 +308,9 @@ func (handler *Handler) copyStream(
 ) (int64, error) {
 	reader := io.Reader(body)
 	if handler.upstreamIdleTimeout > 0 {
-		reader = &idleReader{reader: body, timeout: handler.upstreamIdleTimeout, cancel: cancel}
+		idle := newIdleReader(body, handler.upstreamIdleTimeout, cancel)
+		defer idle.Close()
+		reader = idle
 	}
 	responseWriter := io.Writer(writer)
 	if handler.writeIdleTimeout > 0 {
@@ -321,36 +326,81 @@ func (handler *Handler) copyStream(
 
 // idleReader turns a stalled upstream body read into cancellation and a bounded deadline error.
 type idleReader struct {
-	reader  io.ReadCloser
-	timeout time.Duration
-	cancel  context.CancelFunc
+	reader   io.ReadCloser
+	timeout  time.Duration
+	cancel   context.CancelFunc
+	progress chan struct{}
+	done     chan struct{}
+	mu       sync.Mutex
+	timedOut bool
+	close    sync.Once
 }
 
-// readResult carries one potentially blocking upstream body read result.
-type readResult struct {
-	count int
-	err   error
-	data  []byte
+// newIdleReader constructs one stream watchdog rather than one goroutine per read.
+func newIdleReader(reader io.ReadCloser, timeout time.Duration, cancel context.CancelFunc) *idleReader {
+	result := &idleReader{
+		reader:   reader,
+		timeout:  timeout,
+		cancel:   cancel,
+		progress: make(chan struct{}, 1),
+		done:     make(chan struct{}),
+	}
+	go result.watch()
+	return result
 }
 
-// Read waits for one upstream body read only until its configured progress deadline.
+// Read records upstream progress while the stream watchdog owns the idle deadline.
 func (reader *idleReader) Read(buffer []byte) (int, error) {
-	result := make(chan readResult, 1)
-	readBuffer := make([]byte, len(buffer))
-	go func() {
-		count, err := reader.reader.Read(readBuffer)
-		result <- readResult{count: count, err: err, data: readBuffer}
-	}()
+	count, err := reader.reader.Read(buffer)
+	if count > 0 {
+		select {
+		case reader.progress <- struct{}{}:
+		default:
+		}
+	}
+	reader.mu.Lock()
+	timedOut := reader.timedOut
+	reader.mu.Unlock()
+	if timedOut && err == nil {
+		return count, context.DeadlineExceeded
+	}
+	return count, err
+}
+
+// Close stops the watchdog and closes the underlying response body once.
+func (reader *idleReader) Close() error {
+	var result error
+	reader.close.Do(func() {
+		close(reader.done)
+		result = reader.reader.Close()
+	})
+	return result
+}
+
+// watch cancels the S3 context and closes its body after one no-progress interval.
+func (reader *idleReader) watch() {
 	timer := time.NewTimer(reader.timeout)
 	defer timer.Stop()
-	select {
-	case read := <-result:
-		copy(buffer, read.data[:read.count])
-		return read.count, read.err
-	case <-timer.C:
-		reader.cancel()
-		_ = reader.reader.Close()
-		return 0, context.DeadlineExceeded
+	for {
+		select {
+		case <-reader.done:
+			return
+		case <-reader.progress:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(reader.timeout)
+		case <-timer.C:
+			reader.mu.Lock()
+			reader.timedOut = true
+			reader.mu.Unlock()
+			reader.cancel()
+			_ = reader.Close()
+			return
+		}
 	}
 }
 
@@ -675,6 +725,7 @@ func NewServerWithOptions(listen string, handler http.Handler, options ServerOpt
 	if options.Logger == nil {
 		options.Logger = slog.New(slog.DiscardHandler)
 	}
+	options.Logger = options.Logger.With("component", "httpserver")
 	return &Server{
 		server: &http.Server{
 			Addr:              listen,
@@ -682,6 +733,7 @@ func NewServerWithOptions(listen string, handler http.Handler, options ServerOpt
 			ReadHeaderTimeout: options.ReadHeaderTimeout,
 			IdleTimeout:       options.IdleTimeout,
 			MaxHeaderBytes:    options.MaxHeaderBytes,
+			ErrorLog:          slog.NewLogLogger(options.Logger.Handler(), slog.LevelError),
 		},
 		shutdownDelay: options.ShutdownDelay,
 		shutdownGrace: options.ShutdownGrace,
@@ -698,13 +750,17 @@ func (server *Server) Run(ctx context.Context) error {
 	if server.readiness != nil {
 		go server.readiness.Start(readinessContext)
 	}
-	server.logger.InfoContext(ctx, "server_starting", "component", "httpserver")
-	go func() { result <- server.server.ListenAndServe() }()
-	server.logger.InfoContext(ctx, "server_listening", "component", "httpserver", "listen", server.server.Addr)
+	server.logger.InfoContext(ctx, "server_starting")
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", server.server.Addr)
+	if err != nil {
+		return err
+	}
+	go func() { result <- server.server.Serve(listener) }()
+	server.logger.InfoContext(ctx, "server_listening", "listen", listener.Addr().String())
 	select {
 	case <-ctx.Done():
 		server.readiness.SetDraining()
-		server.logger.InfoContext(ctx, "shutdown_started", "component", "httpserver")
+		server.logger.InfoContext(ctx, "shutdown_started")
 		if server.shutdownDelay > 0 {
 			select {
 			case <-time.After(server.shutdownDelay):
@@ -717,13 +773,13 @@ func (server *Server) Run(ctx context.Context) error {
 		shutdownContext, cancel := context.WithTimeout(context.Background(), server.shutdownGrace)
 		defer cancel()
 		if err := server.server.Shutdown(shutdownContext); err != nil {
-			server.logger.ErrorContext(ctx, "shutdown_forced", "component", "httpserver")
+			server.logger.ErrorContext(ctx, "shutdown_forced")
 			if closeErr := server.server.Close(); closeErr != nil {
 				return errors.Join(err, closeErr)
 			}
 			return err
 		}
-		server.logger.InfoContext(ctx, "shutdown_completed", "component", "httpserver")
+		server.logger.InfoContext(ctx, "shutdown_completed")
 		return nil
 	case err := <-result:
 		if errors.Is(err, http.ErrServerClosed) {

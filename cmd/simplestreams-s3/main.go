@@ -82,7 +82,6 @@ func serveProxy(ctx context.Context, runtime config.Proxy) error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})).With(
 		"service.name", "simplestreams-s3",
 		"service.version", version,
-		"component", "proxy",
 	)
 	metrics := applicationproxy.NoopMetrics()
 	store, err := s3store.NewWithMetrics(ctx, runtime.S3, runtime.ReadinessTimeout, metrics)

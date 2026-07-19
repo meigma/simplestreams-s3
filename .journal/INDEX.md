@@ -4,3 +4,4 @@
 |-----|------------|-------|--------|---------|
 | 001 | 2026-07-18 | Initial repository work | complete | Defined and planned the V1 Incus Simple Streams publisher and private-S3 proxy. |
 | 002 | 2026-07-18 | Incus compatibility proof | complete | Proved the designed two-item VM catalog through trusted HTTPS and a real Incus import, then closed the disposable evidence PR unmerged. |
+| 003 | 2026-07-19 | Phase 2 implementation | in-progress | Review the approved design and plan, then continue implementation beginning with Phase 2. |

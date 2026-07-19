@@ -24,6 +24,26 @@ type fakeHTTPReader struct {
 	request   proxy.Request
 }
 
+// blockingHTTPReader holds one Get call open to exercise the local stream semaphore.
+type blockingHTTPReader struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+// Head returns an unused fixed representation.
+func (reader *blockingHTTPReader) Head(context.Context, object.ObjectKey, proxy.Request) (proxy.Attributes, error) {
+	size, _ := object.NewByteSize(7)
+	return proxy.Attributes{Size: size}, nil
+}
+
+// Get waits until the test releases the first admitted stream.
+func (reader *blockingHTTPReader) Get(context.Context, object.ObjectKey, proxy.Request) (proxy.Object, error) {
+	close(reader.started)
+	<-reader.release
+	size, _ := object.NewByteSize(7)
+	return proxy.Object{Attributes: proxy.Attributes{Size: size}, Body: io.NopCloser(strings.NewReader("catalog"))}, nil
+}
+
 // Head returns fixed response attributes or the configured failure.
 func (reader *fakeHTTPReader) Head(
 	_ context.Context,
@@ -131,6 +151,44 @@ func TestHandlerRejectsMalformedConditions(t *testing.T) {
 			assert.Zero(t, reader.getCalls)
 		})
 	}
+}
+
+// TestHandlerRestrictsHealthRoutesToGETAndHEAD proves reserved routes do not bypass the HTTP method contract.
+func TestHandlerRestrictsHealthRoutesToGETAndHEAD(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"/healthz", "/readyz"} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			handler := NewHandler(proxy.NewService(&fakeHTTPReader{}, ""))
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, nil))
+
+			assert.Equal(t, http.StatusMethodNotAllowed, response.Code)
+			assert.Equal(t, "GET, HEAD", response.Header().Get("Allow"))
+		})
+	}
+}
+
+// TestHandlerRejectsSaturatedStreamsImmediately proves proxy requests never wait in an unbounded queue.
+func TestHandlerRejectsSaturatedStreamsImmediately(t *testing.T) {
+	t.Parallel()
+	reader := &blockingHTTPReader{started: make(chan struct{}), release: make(chan struct{})}
+	handler := NewHandlerWithOptions(proxy.NewService(reader, ""), Options{MaxStreams: 1})
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/streams/v1/index.json", nil))
+	}()
+	<-reader.started
+
+	second := httptest.NewRecorder()
+	handler.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/streams/v1/index.json", nil))
+
+	assert.Equal(t, http.StatusServiceUnavailable, second.Code)
+	assert.Equal(t, "1", second.Header().Get("Retry-After"))
+	close(reader.release)
+	<-firstDone
 }
 
 // TestHandlerStreamsGETAndMapsHEADWithoutBodies proves the thin Phase 2 HTTP contract.

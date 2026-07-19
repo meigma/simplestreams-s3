@@ -90,27 +90,49 @@ func NewHandlerWithOptions(service *proxy.Service, options Options) *Handler {
 
 // ServeHTTP reserves health paths and dispatches exact GET or HEAD object reads.
 func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	started := time.Now()
 	requestID := requestID(request.Header.Get("X-Request-ID"))
 	writer.Header().Set("X-Request-ID", requestID)
 	switch request.URL.Path {
 	case "/healthz":
-		handler.health(writer, request, requestID)
+		if !healthMethod(writer, request, requestID) {
+			return
+		}
+		handler.health(writer, request, requestID, started)
 		return
 	case "/readyz":
-		handler.readiness(writer, request, requestID)
+		if !healthMethod(writer, request, requestID) {
+			return
+		}
+		handler.readiness(writer, request, requestID, started)
 		return
 	}
 	switch request.Method {
 	case http.MethodGet, http.MethodHead:
-		handler.object(writer, request, requestID)
+		handler.object(writer, request, requestID, started)
 	default:
 		writer.Header().Set("Allow", "GET, HEAD")
 		writeError(writer, request.Method, http.StatusMethodNotAllowed, "method_not_allowed", requestID)
 	}
 }
 
+// healthMethod enforces the shared GET and HEAD contract for health routes.
+func healthMethod(writer http.ResponseWriter, request *http.Request, requestID string) bool {
+	if request.Method == http.MethodGet || request.Method == http.MethodHead {
+		return true
+	}
+	writer.Header().Set("Allow", "GET, HEAD")
+	writeError(writer, request.Method, http.StatusMethodNotAllowed, "method_not_allowed", requestID)
+	return false
+}
+
 // readiness returns cached catalog availability without waiting for an S3 operation.
-func (handler *Handler) readiness(writer http.ResponseWriter, request *http.Request, requestID string) {
+func (handler *Handler) readiness(
+	writer http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	started time.Time,
+) {
 	ready, reason := handler.ready.Status(time.Now())
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("Cache-Control", "no-store")
@@ -120,6 +142,7 @@ func (handler *Handler) readiness(writer http.ResponseWriter, request *http.Requ
 		status = http.StatusOK
 		body = `{"status":"ready"}`
 	}
+	handler.metrics.RecordReadiness(request.Context(), ready, reason)
 	writer.WriteHeader(status)
 	if request.Method != http.MethodHead {
 		_, _ = io.WriteString(writer, body)
@@ -133,11 +156,18 @@ func (handler *Handler) readiness(writer http.ResponseWriter, request *http.Requ
 		"readiness",
 		"http.response.status_code",
 		status,
+		"duration_ms",
+		time.Since(started).Milliseconds(),
 	)
 }
 
 // health returns process-local liveness without contacting S3 or metrics.
-func (handler *Handler) health(writer http.ResponseWriter, request *http.Request, requestID string) {
+func (handler *Handler) health(
+	writer http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	started time.Time,
+) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(http.StatusOK)
@@ -153,15 +183,31 @@ func (handler *Handler) health(writer http.ResponseWriter, request *http.Request
 		"health",
 		"http.response.status_code",
 		http.StatusOK,
+		"duration_ms",
+		time.Since(started).Milliseconds(),
 	)
 }
 
 // object applies the bounded HTTP-to-S3 read contract to one object request.
-func (handler *Handler) object(writer http.ResponseWriter, request *http.Request, requestID string) {
+func (handler *Handler) object(
+	writer http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	started time.Time,
+) {
 	readRequest, err := parseRequest(request)
 	if err != nil {
 		writeError(writer, request.Method, http.StatusBadRequest, "invalid_input", requestID)
-		handler.record(request.Context(), requestID, request.Method, http.StatusBadRequest, 0, "invalid_input", false)
+		handler.record(
+			request.Context(),
+			requestID,
+			request.Method,
+			http.StatusBadRequest,
+			0,
+			"invalid_input",
+			false,
+			started,
+		)
 		return
 	}
 	if !handler.acquire() {
@@ -176,16 +222,21 @@ func (handler *Handler) object(writer http.ResponseWriter, request *http.Request
 			0,
 			"unavailable",
 			readRequest.Range != "",
+			started,
 		)
 		return
 	}
-	defer handler.release()
+	handler.metrics.RecordActiveStreams(request.Context(), len(handler.streams))
+	defer func() {
+		handler.release()
+		handler.metrics.RecordActiveStreams(request.Context(), len(handler.streams))
+	}()
 
 	if request.Method == http.MethodHead {
-		handler.head(writer, request, requestID, readRequest)
+		handler.head(writer, request, requestID, readRequest, started)
 		return
 	}
-	handler.get(writer, request, requestID, readRequest)
+	handler.get(writer, request, requestID, readRequest, started)
 }
 
 // get streams one exact S3 representation without buffering or rewriting it.
@@ -194,13 +245,14 @@ func (handler *Handler) get(
 	request *http.Request,
 	requestID string,
 	readRequest proxy.Request,
+	started time.Time,
 ) {
 	streamContext, cancel := context.WithCancel(request.Context())
 	defer cancel()
 	result, err := handler.proxy.Get(streamContext, request.URL.EscapedPath(), readRequest)
 	if err != nil {
 		status, code := writeApplicationError(writer, request.Method, err, requestID)
-		handler.record(request.Context(), requestID, request.Method, status, 0, code, readRequest.Range != "")
+		handler.record(request.Context(), requestID, request.Method, status, 0, code, readRequest.Range != "", started)
 		return
 	}
 	defer result.Body.Close()
@@ -237,10 +289,11 @@ func (handler *Handler) get(
 			written,
 			errorKind,
 			readRequest.Range != "",
+			started,
 		)
 		return
 	}
-	handler.record(request.Context(), requestID, request.Method, status, written, "", readRequest.Range != "")
+	handler.record(request.Context(), requestID, request.Method, status, written, "", readRequest.Range != "", started)
 }
 
 // copyStream applies independent upstream-read and downstream-write progress bounds.
@@ -329,11 +382,12 @@ func (handler *Handler) head(
 	request *http.Request,
 	requestID string,
 	readRequest proxy.Request,
+	started time.Time,
 ) {
 	attributes, err := handler.proxy.Head(request.Context(), request.URL.EscapedPath(), readRequest)
 	if err != nil {
 		status, code := writeApplicationError(writer, request.Method, err, requestID)
-		handler.record(request.Context(), requestID, request.Method, status, 0, code, readRequest.Range != "")
+		handler.record(request.Context(), requestID, request.Method, status, 0, code, readRequest.Range != "", started)
 		return
 	}
 	writeAttributes(writer.Header(), attributes)
@@ -342,7 +396,7 @@ func (handler *Handler) head(
 		status = http.StatusPartialContent
 	}
 	writer.WriteHeader(status)
-	handler.record(request.Context(), requestID, request.Method, status, 0, "", readRequest.Range != "")
+	handler.record(request.Context(), requestID, request.Method, status, 0, "", readRequest.Range != "", started)
 }
 
 // acquire reserves one S3-backed stream without queueing callers.
@@ -367,6 +421,7 @@ func (handler *Handler) record(
 	bodySize int64,
 	errorKind string,
 	rangeRequested bool,
+	started time.Time,
 ) {
 	handler.metrics.RecordRequest(ctx, proxy.RequestMetric{
 		Method: method, Route: "object", StatusCode: status, BodySize: bodySize, ErrorKind: errorKind,
@@ -382,7 +437,8 @@ func (handler *Handler) record(
 	if errorKind != "" {
 		attributes = append(attributes, slog.String("error.kind", errorKind))
 	}
-	handler.logger.LogAttrs(context.Background(), slog.LevelInfo, "request completed", attributes...)
+	attributes = append(attributes, slog.Int64("duration_ms", time.Since(started).Milliseconds()))
+	handler.logger.LogAttrs(ctx, slog.LevelInfo, "request completed", attributes...)
 }
 
 // writeAttributes maps the fixed allowlist of S3 response properties.
@@ -662,6 +718,9 @@ func (server *Server) Run(ctx context.Context) error {
 		defer cancel()
 		if err := server.server.Shutdown(shutdownContext); err != nil {
 			server.logger.ErrorContext(ctx, "shutdown_forced", "component", "httpserver")
+			if closeErr := server.server.Close(); closeErr != nil {
+				return errors.Join(err, closeErr)
+			}
 			return err
 		}
 		server.logger.InfoContext(ctx, "shutdown_completed", "component", "httpserver")

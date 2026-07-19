@@ -84,7 +84,8 @@ func serveProxy(ctx context.Context, runtime config.Proxy) error {
 		"service.version", version,
 		"component", "proxy",
 	)
-	store, err := s3store.New(ctx, runtime.S3, runtime.ReadinessTimeout)
+	metrics := applicationproxy.NoopMetrics()
+	store, err := s3store.NewWithMetrics(ctx, runtime.S3, runtime.ReadinessTimeout, metrics)
 	if err != nil {
 		return err
 	}
@@ -98,7 +99,7 @@ func serveProxy(ctx context.Context, runtime config.Proxy) error {
 	handler := httpserver.NewHandlerWithOptions(service, httpserver.Options{
 		MaxStreams:          runtime.MaxStreams,
 		Logger:              logger,
-		Metrics:             applicationproxy.NoopMetrics(),
+		Metrics:             metrics,
 		Readiness:           readiness,
 		UpstreamIdleTimeout: runtime.UpstreamIdleTimeout,
 		WriteIdleTimeout:    runtime.WriteIdleTimeout,

@@ -26,3 +26,6 @@ Completed the final hardening commit 43e8c0a on `feat/phase4-production-proxy`: 
 
 ## 2026-07-19 14:02 — GitHub repository configuration converged
 Ran `.github/scripts/configure_github_repo.py` as an authenticated repository administrator against `meigma/simplestreams-s3`. It applied six supported manifest settings: general repository settings, immutable releases, private vulnerability reporting, automated security fixes, and the managed default-branch and default-tag rulesets. An immediate plan reported no remaining supported changes. The manifest's unsupported UI-only settings remain explicitly reported for manual follow-up; no source changes were made.
+
+## 2026-07-19 14:06 — Release Please app credentials imported
+Used `op` as the source of truth for `Homelab/meigma-release-please` and wrote the `app_id` to repository variable `MEIGMA_RELEASE_APP_ID` and `key.pem` to repository secret `MEIGMA_RELEASE_APP_PRIVATE_KEY` with `gh`. Both targets are present with current update timestamps; the private key passed a non-revealing `openssl pkey -noout` validation. No credential value was logged or written to the repository.

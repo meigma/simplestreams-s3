@@ -6,3 +6,4 @@
 | 002 | 2026-07-18 | Incus compatibility proof | complete | Proved the designed two-item VM catalog through trusted HTTPS and a real Incus import, then closed the disposable evidence PR unmerged. |
 | 003 | 2026-07-19 | Phase 2 implementation | complete | Delivered and merged the empty-mirror private-S3 publisher and proxy slice with MinIO and Incus acceptance evidence. |
 | 004 | 2026-07-19 | Phase 3 publication updates | complete | Delivered and merged idempotent, concurrent existing-catalog publication with MinIO and real-AWS conditional-write proof. |
+| 005 | 2026-07-19 | Phase 4 proxy behavior | in-progress | Reviewing session 001's approved design and plan before continuing Phase 4 proxy behavior. |

@@ -37,3 +37,6 @@ The opt-in real-AWS conformance test also passed in a fresh one-hour whzbox sand
 
 ## 2026-07-19 12:51 — Hosted checks passed
 PR #9's hosted checks passed at unchanged head `b713ed3f78b3a4468dfe83de9b662645ab3afd7b`: main CI passed in 2m39s, GitHub Pages passed, and Kusari Inspector passed. Non-applicable release, container, and deployment dry-run jobs skipped. Phase 3 is ready for human review and remains unmerged.
+
+## 2026-07-19 13:14 — Close
+The user approved [PR #9](https://github.com/meigma/simplestreams-s3/pull/9), which was squash-merged at the reviewed head into `master` as `d6cc2a7697bdaecf16ef89f496606a3106f31927`. Local `master` was fast-forwarded to that commit, the remote implementation branch was deleted, and Worktrunk removed the integrated `phase3-safe-repeat-publication` branch and worktree. Phase 3 and the V1 publish path are complete; Phase 4 is the next implementation boundary.

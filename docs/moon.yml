@@ -7,8 +7,8 @@ tags:
   - 'uv'
 
 project:
-  title: 'template-go docs'
-  description: 'MkDocs documentation site for the Meigma Go repository template.'
+  title: 'simplestreams-s3 docs'
+  description: 'Documentation for the Incus Simple Streams private-S3 publisher and proxy.'
   owner: 'meigma'
   maintainers:
     - 'meigma'

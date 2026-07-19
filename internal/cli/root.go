@@ -1,3 +1,4 @@
+// Package cli constructs the thin Cobra command adapters.
 package cli
 
 import (
@@ -6,13 +7,14 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 
-	"github.com/meigma/template-go/internal/config"
-	"github.com/meigma/template-go/internal/templateinfo"
+	cliproxy "github.com/meigma/simplestreams-s3/internal/cli/proxy"
+	clipublish "github.com/meigma/simplestreams-s3/internal/cli/publish"
 )
 
-// BuildInfo describes linker-injected build metadata printed by --version.
+const versionCommandName = "version"
+
+// BuildInfo describes linker-injected build metadata.
 type BuildInfo struct {
 	// Version is the release version.
 	Version string
@@ -22,22 +24,49 @@ type BuildInfo struct {
 	Date string
 }
 
-// Options customizes root command construction.
+// Options customizes root command construction and dependency wiring.
 type Options struct {
 	// In receives interactive command input.
 	In io.Reader
-	// Out receives machine-readable command output.
+	// Out receives command output.
 	Out io.Writer
-	// Err receives diagnostics and human-readable status.
+	// Err receives diagnostics.
 	Err io.Writer
-	// Build controls the root command version output.
+	// Build controls version output.
 	Build BuildInfo
-	// Viper is the configuration instance used by the command tree.
-	Viper *viper.Viper
+	// Publish executes the publication application service.
+	Publish clipublish.Runner
+	// Proxy executes the proxy application service.
+	Proxy cliproxy.Runner
 }
 
-// NewRootCommand creates the template-go Cobra command tree.
+// NewRootCommand creates the simplestreams-s3 Cobra command tree.
 func NewRootCommand(options Options) *cobra.Command {
+	options = withDefaults(options)
+	root := &cobra.Command{
+		Use:           "simplestreams-s3",
+		Short:         "Publish Incus VM images to private S3 and proxy their Simple Streams catalog",
+		Version:       options.Build.Version,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return command.Help()
+		},
+	}
+	root.SetVersionTemplate(versionLine(options.Build))
+	root.SetIn(options.In)
+	root.SetOut(options.Out)
+	root.SetErr(options.Err)
+	root.AddCommand(
+		clipublish.NewCommand(options.Publish),
+		cliproxy.NewCommand(options.Proxy),
+		newVersionCommand(options.Build),
+	)
+	return root
+}
+
+// withDefaults supplies inert streams and development build metadata.
+func withDefaults(options Options) Options {
 	if options.In == nil {
 		options.In = strings.NewReader("")
 	}
@@ -47,72 +76,32 @@ func NewRootCommand(options Options) *cobra.Command {
 	if options.Err == nil {
 		options.Err = io.Discard
 	}
-	if options.Viper == nil {
-		options.Viper = viper.New()
+	if strings.TrimSpace(options.Build.Version) == "" {
+		options.Build.Version = "dev"
 	}
-	options.Build = options.Build.withDefaults()
+	if strings.TrimSpace(options.Build.Commit) == "" {
+		options.Build.Commit = "none"
+	}
+	if strings.TrimSpace(options.Build.Date) == "" {
+		options.Build.Date = "unknown"
+	}
+	return options
+}
 
-	root := &cobra.Command{
-		Use:           "template-go",
-		Short:         "Meigma Go repository template application",
-		Version:       options.Build.Version,
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			return initializeConfig(cmd, options.Viper)
+// newVersionCommand constructs the explicit version subcommand.
+func newVersionCommand(build BuildInfo) *cobra.Command {
+	return &cobra.Command{
+		Use:   versionCommandName,
+		Short: "Print build version information",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			_, err := fmt.Fprint(command.OutOrStdout(), versionLine(build))
+			return err
 		},
-		RunE: func(_ *cobra.Command, _ []string) error {
-			cfg := config.Load(options.Viper)
-			return printLine(options.Out, cfg.Message)
-		},
 	}
-	root.SetVersionTemplate(
-		fmt.Sprintf(
-			"template-go %s (%s) built %s\n",
-			options.Build.Version,
-			options.Build.Commit,
-			options.Build.Date,
-		),
-	)
-	root.SetIn(options.In)
-	root.SetOut(options.Out)
-	root.SetErr(options.Err)
-	root.PersistentFlags().String("message", templateinfo.Summary(), "message to print")
-	return root
 }
 
-func (b BuildInfo) withDefaults() BuildInfo {
-	if strings.TrimSpace(b.Version) == "" {
-		b.Version = "dev"
-	}
-	if strings.TrimSpace(b.Commit) == "" {
-		b.Commit = "none"
-	}
-	if strings.TrimSpace(b.Date) == "" {
-		b.Date = "unknown"
-	}
-	return b
-}
-
-func initializeConfig(cmd *cobra.Command, vp *viper.Viper) error {
-	vp.SetEnvPrefix("TEMPLATE_GO")
-	vp.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
-	vp.AutomaticEnv()
-
-	if err := vp.BindPFlags(cmd.Root().PersistentFlags()); err != nil {
-		return fmt.Errorf("bind persistent flags: %w", err)
-	}
-	if err := vp.BindPFlags(cmd.Flags()); err != nil {
-		return fmt.Errorf("bind flags: %w", err)
-	}
-
-	return nil
-}
-
-func printLine(w io.Writer, line string) error {
-	if _, err := fmt.Fprintln(w, line); err != nil {
-		return fmt.Errorf("write output: %w", err)
-	}
-
-	return nil
+// versionLine renders the stable human-readable build identity.
+func versionLine(build BuildInfo) string {
+	return fmt.Sprintf("simplestreams-s3 %s (%s) built %s\n", build.Version, build.Commit, build.Date)
 }

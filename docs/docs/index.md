@@ -1,16 +1,11 @@
 ---
-title: template-go Docs
-slug: /
-description: Starting point for Meigma Go projects.
+title: simplestreams-s3 Docs
 ---
 
-# template-go Docs
+# simplestreams-s3
 
-This repository is the starting point for Meigma Go projects.
+`simplestreams-s3` publishes split Incus VM images into a private Amazon S3 mirror and serves the static Simple Streams layout through authenticated S3 reads.
 
-Generated projects should replace this page with project-specific documentation after bootstrapping:
+The proxy listener is plain HTTP and unauthenticated. Deploy it behind trusted HTTPS termination and the downstream access-control policy appropriate for the environment.
 
-- project summary
-- quick start
-- operating notes
-- support and security paths
+The current Phase 2 slice supports publication into an empty mirror root and exact proxy `GET`/`HEAD` reads. Existing-catalog safety, production proxy behavior, telemetry, and complete operator reference material follow in the later approved implementation phases.

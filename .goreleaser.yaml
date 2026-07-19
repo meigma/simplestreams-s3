@@ -1,15 +1,15 @@
 version: 2
 
-project_name: template-go
+project_name: simplestreams-s3
 
 before:
   hooks:
     - go test ./...
 
 builds:
-  - id: template-go
-    main: ./cmd/template-go
-    binary: template-go
+  - id: simplestreams-s3
+    main: ./cmd/simplestreams-s3
+    binary: simplestreams-s3
     env:
       - CGO_ENABLED=0
     goos:
@@ -28,9 +28,9 @@ builds:
     mod_timestamp: '{{ .CommitTimestamp }}'
 
 archives:
-  - id: template-go
+  - id: simplestreams-s3
     ids:
-      - template-go
+      - simplestreams-s3
     formats:
       - binary
     name_template: >-

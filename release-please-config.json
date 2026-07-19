@@ -9,7 +9,7 @@
   "bump-patch-for-minor-pre-major": true,
   "packages": {
     ".": {
-      "package-name": "template-go",
+      "package-name": "simplestreams-s3",
       "changelog-path": "CHANGELOG.md",
       "extra-files": ["melange.yaml", "apko.yaml"]
     }

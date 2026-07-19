@@ -1,7 +1,7 @@
 # Contributing
 
 Thank you for your interest in contributing.
-This repository is a Go project template, so changes should keep the generated-project path simple and predictable.
+This repository implements an Incus Simple Streams publisher and private-S3 proxy. Changes should preserve the documented phase boundary and the hexagonal package seams.
 For private vulnerability reporting, use [SECURITY.md](SECURITY.md) instead of public channels.
 
 ## Reporting Bugs
@@ -41,7 +41,7 @@ moon run root:format
 moon run root:lint
 moon run root:build
 moon run root:test
-go run ./cmd/template-go --version
+go run ./cmd/simplestreams-s3 --version
 ```
 
 ## Release Changes

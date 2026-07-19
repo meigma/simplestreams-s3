@@ -1,7 +1,7 @@
 [project]
-name = "template-go-docs"
+name = "simplestreams-s3-docs"
 version = "0.0.0"
-description = "MkDocs documentation site for the Meigma Go repository template."
+description = "Documentation for the Incus Simple Streams private-S3 publisher and proxy."
 requires-python = ">=3.14"
 dependencies = [
     "mkdocs-material>=9.7.0",

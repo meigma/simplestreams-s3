@@ -63,6 +63,12 @@ type errorBody struct {
 	RequestID string `json:"request_id"`
 }
 
+// readinessBody is the stable JSON representation of cached readiness state.
+type readinessBody struct {
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+}
+
 // NewHandler constructs an HTTP adapter with normative production defaults.
 func NewHandler(service *proxy.Service) *Handler {
 	return NewHandlerWithOptions(service, Options{MaxStreams: defaultMaxStreams})
@@ -170,15 +176,21 @@ func (handler *Handler) readiness(
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("Cache-Control", "no-store")
 	status := http.StatusServiceUnavailable
-	body := `{"status":"not_ready","reason":"` + reason + `"}`
+	response := readinessBody{Status: "not_ready", Reason: reason}
 	if ready {
 		status = http.StatusOK
-		body = `{"status":"ready"}`
+		response = readinessBody{Status: "ready"}
+	}
+	body, err := json.Marshal(response)
+	if err != nil {
+		writeError(writer, request.Method, http.StatusInternalServerError, "internal", requestID)
+		handler.record(request, requestID, "readiness", http.StatusInternalServerError, 0, "internal", false, started)
+		return
 	}
 	writer.WriteHeader(status)
 	bodySize := int64(0)
 	if request.Method != http.MethodHead {
-		written, _ := io.WriteString(writer, body)
+		written, _ := writer.Write(body)
 		bodySize = int64(written)
 	}
 	handler.record(request, requestID, "readiness", status, bodySize, "", false, started)

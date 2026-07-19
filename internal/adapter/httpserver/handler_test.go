@@ -518,4 +518,9 @@ func TestHandlerSanitizesErrorsAndReservesHealthRoutes(t *testing.T) {
 	assert.Equal(t, http.StatusOK, health.Code)
 	assert.Zero(t, reader.headCalls)
 	require.Equal(t, 1, reader.getCalls)
+
+	readiness := httptest.NewRecorder()
+	handler.ServeHTTP(readiness, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	assert.Equal(t, http.StatusServiceUnavailable, readiness.Code)
+	assert.JSONEq(t, `{"status":"not_ready","reason":"starting"}`, readiness.Body.String())
 }

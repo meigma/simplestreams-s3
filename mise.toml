@@ -16,7 +16,7 @@
 
 [tools]
 # Language runtimes (core backend).
-go = "1.26.4"
+go = "1.26.5"
 python = "3.14.3"
 
 # Go dev-tool CLI. The explicit `aqua:` ref forces the VERIFYING backend (checksum +

@@ -20,7 +20,19 @@ lima: 2.0.3, VZ aarch64 Ubuntu 24.04 guest
 mkcert: 1.4.4
 Incus guest client/server: 6.0.0 / 6.0.0
 go-simplestreams: v0.1.0
+golang.org/x/net selected override: v0.57.0
 ```
+
+Kusari's first analysis found that `go-simplestreams` v0.1.0 selected
+`golang.org/x/net` v0.52.0 through CUE and flagged CVE-2026-39821. The spike
+retains the required library version while selecting the fixed `x/net` v0.57.0.
+The generator tests and full Incus listing/import proof were repeated after
+that dependency update with identical catalog paths and fingerprint.
+
+Kusari also reported `github.com/opencontainers/go-digest` v1.0.0 as carrying
+CC-BY-SA-4.0. The module's Go source is Apache-2.0; its README explicitly limits
+the Creative Commons license to `README.md` and `CONTRIBUTING.md`. No dependency
+source or documentation is distributed by this unmerged spike.
 
 ## Source image
 

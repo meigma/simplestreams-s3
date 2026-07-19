@@ -1,5 +1,5 @@
 ---
-title: simplestreams-s3 Docs
+title: simplestreams-s3 documentation
 ---
 
 # simplestreams-s3
@@ -8,4 +8,11 @@ title: simplestreams-s3 Docs
 
 The proxy listener is plain HTTP and unauthenticated. Deploy it behind trusted HTTPS termination and the downstream access-control policy appropriate for the environment.
 
-The current slice safely adopts compatible catalogs, makes repeated publication a no-op, preserves concurrent compatible updates through bounded conditional writes, and serves exact proxy `GET`/`HEAD` reads. Conflicting catalog or immutable-object state fails closed. Production proxy behavior, telemetry, and complete operator reference material follow in the later approved implementation phases.
+Use these documents while operating V1:
+
+- [Operator guide](operator-guide.md) — prepare a private bucket, separate IAM identities, publish an image, and deploy the proxy.
+- [Configuration reference](configuration.md) — look up every YAML key, flag, environment variable, default, and validation rule.
+- [Observability reference](observability.md) — configure health probes, JSON logging, and optional OTLP metrics.
+- [Verification reference](verification.md) — run the local, CI, real-AWS, Incus, release, and container gates.
+
+V1 supports split virtual-machine images for `amd64` and `arm64`. It does not support containers, unified images, LXD compatibility, image deletion, metadata signing, proxy caching, downstream authentication, or public TLS termination.

@@ -7,9 +7,11 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/meigma/simplestreams-s3/internal/adapter/httpserver"
 	"github.com/meigma/simplestreams-s3/internal/adapter/s3store"
+	"github.com/meigma/simplestreams-s3/internal/adapter/telemetry"
 	"github.com/meigma/simplestreams-s3/internal/cli"
 	"github.com/meigma/simplestreams-s3/internal/config"
 	applicationproxy "github.com/meigma/simplestreams-s3/internal/proxy"
@@ -83,17 +85,31 @@ func serveProxy(ctx context.Context, runtime config.Proxy) error {
 		"service.name", "simplestreams-s3",
 		"service.version", version,
 	)
-	metrics := applicationproxy.NoopMetrics()
+	metricsRuntime, err := telemetry.NewRuntime(ctx, telemetry.Options{
+		Endpoint:       runtime.Metrics.Endpoint,
+		Interval:       runtime.Metrics.Interval,
+		Timeout:        runtime.Metrics.Timeout,
+		Insecure:       runtime.Metrics.Insecure,
+		ServiceVersion: version,
+		Logger:         logger,
+	})
+	if err != nil {
+		return err
+	}
+	defer shutdownMetrics(metricsRuntime, runtime.Metrics.Timeout, logger)
+	metrics := metricsRuntime.Metrics()
 	store, err := s3store.NewWithMetrics(ctx, runtime.S3, runtime.ReadinessTimeout, metrics)
 	if err != nil {
 		return err
 	}
 	service := applicationproxy.NewService(store, runtime.S3.Prefix)
-	readiness := httpserver.NewReadiness(
+	readiness := httpserver.NewReadinessWithObservers(
 		service.Probe,
 		runtime.ReadinessInterval,
 		runtime.ReadinessTimeout,
 		runtime.ReadinessStaleness,
+		metrics,
+		logger,
 	)
 	handler := httpserver.NewHandlerWithOptions(service, httpserver.Options{
 		MaxStreams:          runtime.MaxStreams,
@@ -112,4 +128,13 @@ func serveProxy(ctx context.Context, runtime config.Proxy) error {
 		Readiness:         readiness,
 		Logger:            logger,
 	}).Run(ctx)
+}
+
+// shutdownMetrics performs the fail-open exporter flush within its independent bound.
+func shutdownMetrics(metrics *telemetry.Runtime, timeout time.Duration, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := metrics.Shutdown(ctx); err != nil {
+		logger.Warn("metric shutdown failed", "component", "telemetry", "error.kind", "shutdown_failed")
+	}
 }

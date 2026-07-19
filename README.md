@@ -2,19 +2,49 @@
 
 `simplestreams-s3` publishes split Incus virtual-machine images to a private Amazon S3 bucket and serves the resulting Simple Streams mirror through authenticated S3 reads.
 
-The current implementation provides a safe private-mirror publication slice:
+It provides three commands:
 
-- `simplestreams-s3 publish METADATA_TARBALL DISK_QCOW2` validates one split VM image, adopts a compatible existing catalog, and publishes through bounded conditional writes;
-- `simplestreams-s3 proxy` exposes exact `GET` and `HEAD` reads from that mirror over plain HTTP inside a trusted deployment boundary;
+- `simplestreams-s3 publish METADATA_TARBALL DISK_QCOW2` validates and conditionally publishes one split VM image;
+- `simplestreams-s3 proxy` serves exact `GET` and `HEAD` reads with ranges, conditions, readiness, JSON logging, graceful draining, and optional OTLP metrics;
 - `simplestreams-s3 version` prints linker-injected build information.
 
-Repeating an identical publication is a no-op. Compatible versions are merged without dropping unrelated index entries, while conflicting aliases, metadata, or immutable objects fail closed. Production HTTP behavior, readiness, structured logging, and graceful draining arrive in Phase 4. Optional telemetry and complete operator guidance arrive in Phase 5.
+Publication is idempotent and safe under compatible concurrent updates. Conflicting aliases, metadata, catalog generations, or immutable objects fail closed without moving the active index.
 
 ## Security boundary
 
-The bucket must remain private. Both commands authenticate to AWS through the SDK's default credential chain; static access keys are not application settings. The proxy does not authenticate downstream clients and does not terminate public TLS. Put it behind an ingress or network boundary that supplies HTTPS and the required access-control policy.
+The S3 bucket must remain private. Both commands authenticate through the AWS SDK default credential chain; static access keys are not application settings. The proxy does not authenticate downstream clients and does not terminate public TLS. Deploy it behind an ingress or network boundary that provides HTTPS and the required access-control policy.
 
-The configured bucket prefix is owned exclusively by this mirror and must not contain unrelated or sensitive objects.
+The configured bucket prefix is dedicated to one mirror and must not contain unrelated or sensitive objects. See the [operator guide](https://meigma.github.io/simplestreams-s3/operator-guide/) for the complete bucket, IAM, ingress, KMS, and multipart-cleanup requirements.
+
+## Quick start
+
+Publish one split VM image:
+
+```sh
+simplestreams-s3 publish \
+  --s3-bucket private-images \
+  --s3-region us-west-2 \
+  incus.tar.xz disk.qcow2
+```
+
+Start the plain-HTTP proxy inside its trusted deployment boundary:
+
+```sh
+SIMPLESTREAMS_S3_BUCKET=private-images \
+SIMPLESTREAMS_S3_REGION=us-west-2 \
+simplestreams-s3 proxy --listen :8080
+```
+
+Enable OTLP/HTTP metrics for a local cleartext collector:
+
+```sh
+simplestreams-s3 proxy \
+  --s3-bucket private-images \
+  --metrics-endpoint localhost:4318 \
+  --metrics-insecure
+```
+
+Cleartext OTLP is accepted only for an explicit loopback endpoint. Production collectors use verified TLS. Standard `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_METRICS_HEADERS` provide collector authentication headers.
 
 ## Inputs
 
@@ -23,82 +53,42 @@ The configured bucket prefix is owned exclusively by this mirror and must not co
 1. an xz-compressed Incus metadata tarball containing one root `metadata.yaml`; and
 2. a QCOW2 virtual-machine disk.
 
-V1 supports `amd64`/`x86_64` and `arm64`/`aarch64`. Container images, unified images, LXD compatibility, format conversion, and catalog deletion are intentionally unsupported.
+V1 supports `amd64`/`x86_64` and `arm64`/`aarch64`. Container images, unified images, LXD compatibility, format conversion, deletion, and garbage collection are intentionally unsupported.
 
 ## Configuration
 
-Settings use this precedence, highest first:
+Configuration precedence is fixed, highest first:
 
 1. command flags;
 2. `SIMPLESTREAMS_S3_*` environment variables;
 3. the YAML file explicitly selected by `--config` or `SIMPLESTREAMS_S3_CONFIG`;
 4. defaults.
 
-There is no implicit config-file search. Unknown YAML keys and invalid values fail startup. Run command help for the settings implemented in the current slice:
+There is no implicit config-file search. Unknown YAML keys and invalid values fail startup. See the complete [configuration reference](https://meigma.github.io/simplestreams-s3/configuration/).
 
-```sh
-go run ./cmd/simplestreams-s3 publish --help
-go run ./cmd/simplestreams-s3 proxy --help
-```
+## Development and verification
 
-Example publication:
-
-```sh
-go run ./cmd/simplestreams-s3 publish \
-  --s3-bucket private-images \
-  --s3-region us-west-2 \
-  incus.tar.xz disk.qcow2
-```
-
-Example proxy:
-
-```sh
-SIMPLESTREAMS_S3_BUCKET=private-images \
-SIMPLESTREAMS_S3_REGION=us-west-2 \
-go run ./cmd/simplestreams-s3 proxy --listen :8080
-```
-
-## Development
-
-[mise](https://mise.jdx.dev) provisions the pinned toolchain from `mise.toml` and `mise.lock`. [Moon](https://moonrepo.dev) remains the task front door:
+[mise](https://mise.jdx.dev) provisions the locked toolchain and [Moon](https://moonrepo.dev) is the task front door:
 
 ```sh
 mise install
-moon run root:format
-moon run root:lint
-moon run root:test
 moon run root:check
-```
-
-The containerized integration gate uses Testcontainers with MinIO:
-
-```sh
 moon run root:integration
 ```
 
-An additional opt-in conformance test exercises real AWS conditional-write semantics against a disposable bucket:
+CI additionally runs the race detector and a real Incus listing/import acceptance gate. The opt-in genuine-AWS conditional-write conformance test is:
 
 ```sh
 SIMPLESTREAMS_S3_REAL_AWS_BUCKET=disposable-test-bucket \
 SIMPLESTREAMS_S3_REAL_AWS_REGION=us-west-2 \
-go test -count=1 -tags integration -run TestRealAWSConditionalIndexWrite ./internal/integration
+go test -count=1 -tags integration \
+  -run TestRealAWSConditionalIndexWrite ./internal/integration
 ```
 
-## Container image
+See [verification](https://meigma.github.io/simplestreams-s3/verification/) for the complete V1 gate map.
 
-The release image has no Dockerfile. Melange builds the Go binary into a signed Wolfi apk, and apko assembles the minimal non-root, multi-architecture runtime image.
+## Release artifacts
 
-```sh
-mise run image-local
-docker run --rm simplestreams-s3:dev version
-```
+GoReleaser builds static `darwin` and `linux` binaries for `amd64` and `arm64`. Melange builds a signed Wolfi apk and apko assembles the multi-architecture, non-root container image without a Dockerfile. Release workflows generate checksums, SBOMs, signatures, and provenance attestations.
 
-## Release and verification
-
-Release Please, GoReleaser, melange, apko, cosign, SBOM attestation, and the isolated provenance workflow remain intact under the `simplestreams-s3` product, package, binary, and image names. The aggregate local and CI gate is:
-
-```sh
-moon run root:check
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and [SECURITY.md](SECURITY.md) for vulnerability reporting.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution workflow and [SECURITY.md](SECURITY.md) for private vulnerability reporting.

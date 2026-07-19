@@ -20,3 +20,8 @@ Recommended first checkpoint: prove catalog adoption and merge in memory through
 Tested `/Users/josh/code/meigma/whzbox` from clean `main` at `9851e3b` using a binary built directly from that checkout. The cached Whizlabs session initially required an interactive refresh; after the user ran `whzbox login`, a genuine fresh one-hour AWS sandbox was created and credential-verified in `us-east-1` in about 28 seconds.
 
 Through `whzbox exec aws`, `sts get-caller-identity` succeeded and the sandbox created `whzbox-s3-probe-20260719-7ff5549c`. A 38-byte probe object was uploaded, read through `HeadObject`, and downloaded with an exact byte-for-byte match; S3 reported AES-256 server-side encryption. The probe object and bucket were deleted, a subsequent `head-bucket` failed as expected, `whzbox destroy --yes` succeeded, and `whzbox list --json` returned zero cached sandboxes. No repository files were changed. This proves whzbox remains suitable for a disposable real-AWS S3 conformance window in Phase 3.
+
+## 2026-07-19 12:19 — Phase 3 execution approved
+The user approved beginning Phase 3 and selected the proven whzbox approach for the portion that requires genuine AWS S3. Fetched `origin/master`, confirmed it matches clean local `master` at `868a29c`, and created isolated Worktrunk branch/worktree `phase3-safe-repeat-publication` at `.wt/phase3-safe-repeat-publication`.
+
+Execution will preserve the single-PR Phase 3 boundary from session 001. Start with an in-memory existing-catalog adoption/merge proof, then add revision-aware storage and conditional index publication, deterministic retry/fault behavior, and local integration coverage. Run the whzbox-backed real-AWS conformance window only after local gates pass, then tear it down immediately.

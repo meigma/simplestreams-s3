@@ -80,3 +80,81 @@ jobs:
 
       - name: Run Moon CI
         run: moon ci --summary minimal
+
+  race:
+    name: Race Detector
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup mise
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          version: 2026.6.14
+          cache: true
+
+      - name: Run race detector
+        run: go test -count=1 -race ./...
+
+  incus-acceptance:
+    name: Incus Acceptance
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup mise
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          version: 2026.6.14
+          cache: true
+
+      - name: Install and initialize Incus
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates incus openssl
+          sudo incus admin waitready
+          sudo incus admin init --minimal
+
+      - name: Create locally trusted acceptance certificate
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-certs
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout .ci-certs/acceptance-key.pem \
+            -out .ci-certs/acceptance.pem \
+            -subj '/CN=simplestreams-s3 acceptance' \
+            -addext 'subjectAltName=IP:127.0.0.1,DNS:localhost' \
+            -addext 'basicConstraints=critical,CA:TRUE' \
+            -addext 'keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign' \
+            -addext 'extendedKeyUsage=serverAuth'
+          sudo cp .ci-certs/acceptance.pem /usr/local/share/ca-certificates/simplestreams-s3-acceptance.crt
+          sudo update-ca-certificates
+          sudo systemctl restart incus.service
+          sudo incus admin waitready
+
+      - name: Run private-S3 Incus listing and import acceptance
+        env:
+          SIMPLESTREAMS_S3_INCUS_ACCEPTANCE: '1'
+          SIMPLESTREAMS_S3_INCUS_SUDO: '1'
+          SIMPLESTREAMS_S3_INCUS_TLS_CERT: ${{ github.workspace }}/.ci-certs/acceptance.pem
+          SIMPLESTREAMS_S3_INCUS_TLS_KEY: ${{ github.workspace }}/.ci-certs/acceptance-key.pem
+        run: >-
+          go test -count=1 -tags integration -run '^TestIncusAcceptance$'
+          -timeout 10m ./internal/integration

@@ -112,6 +112,22 @@ func TestMergeAdoptsCurrentCatalogWithoutLosingState(t *testing.T) {
 	assert.Contains(t, entries, "other")
 	imagesEntry := requireMap(t, entries, incusschema.ContentIDImages)
 	assert.Equal(t, "preserved", imagesEntry["custom_entry_field"])
+
+	thirdOptions := testfixture.DefaultVMOptions()
+	thirdOptions.Release = "edge"
+	thirdOptions.Description = "Alpine edge cloud arm64"
+	thirdVM := inspectFixtureVM(t, thirdOptions)
+	third, err := Merge(
+		decodeCurrent(t, documentsSource(second)),
+		thirdVM,
+		nil,
+		mustReleaseTitle(t, "Alpine edge"),
+		firstUpdated.Add(3*time.Minute),
+	)
+	require.NoError(t, err)
+	var thirdProductDocument map[string]any
+	require.NoError(t, json.Unmarshal(third.Snapshot(), &thirdProductDocument))
+	assert.Len(t, requireMap(t, thirdProductDocument, "products"), 2)
 }
 
 // TestMergeRejectsIncompatibleAdoptedState proves conflicts never become replacement generations.

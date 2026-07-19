@@ -31,6 +31,7 @@ func TestCommandAppliesFlagEnvironmentFileDefaultPrecedence(t *testing.T) {
 	command.SetArgs([]string{
 		"--config", configPath,
 		"--s3-bucket", "flag-bucket",
+		"--catalog-attempts", "9",
 		"metadata.tar.xz",
 		"disk.qcow2",
 	})
@@ -39,7 +40,7 @@ func TestCommandAppliesFlagEnvironmentFileDefaultPrecedence(t *testing.T) {
 	assert.Equal(t, "flag-bucket", captured.S3.Bucket.String())
 	assert.Equal(t, config.DefaultS3MaxAttempts, captured.S3.MaxAttempts)
 	assert.Equal(t, config.DefaultPublishTimeout, captured.Timeout)
-	assert.Equal(t, config.DefaultCatalogAttempts, captured.CatalogAttempts)
+	assert.Equal(t, 9, captured.CatalogAttempts)
 }
 
 // TestCommandLoadsEnvironmentOnlyValuesAndConfigSelector proves explicit env registration unmarshals.
@@ -67,6 +68,45 @@ func TestCommandLoadsEnvironmentOnlyValuesAndConfigSelector(t *testing.T) {
 	assert.Equal(t, "private/incus", captured.S3.Prefix.String())
 	assert.Equal(t, "From file", captured.ReleaseTitle)
 	assert.Equal(t, 7, captured.CatalogAttempts)
+}
+
+// TestCommandLoadsCatalogAttemptsFromYAML proves the Phase 3 bound is file-configurable.
+func TestCommandLoadsCatalogAttemptsFromYAML(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(
+		"s3:\n  bucket: file-bucket\npublish:\n  catalog_attempts: 6\n",
+	), 0o600))
+	var captured config.Publish
+	command := NewCommand(func(
+		_ context.Context,
+		runtime config.Publish,
+		_ application.Request,
+	) (application.Result, error) {
+		captured = runtime
+		return application.Result{}, nil
+	})
+	command.SetArgs([]string{"--config", configPath, "metadata.tar.xz", "disk.qcow2"})
+
+	require.NoError(t, command.ExecuteContext(context.Background()))
+	assert.Equal(t, 6, captured.CatalogAttempts)
+}
+
+// TestCommandDefaultsCatalogAttempts proves omitted configuration uses the bounded default.
+func TestCommandDefaultsCatalogAttempts(t *testing.T) {
+	var captured config.Publish
+	command := NewCommand(func(
+		_ context.Context,
+		runtime config.Publish,
+		_ application.Request,
+	) (application.Result, error) {
+		captured = runtime
+		return application.Result{}, nil
+	})
+	command.SetArgs([]string{"--s3-bucket", "private-bucket", "metadata.tar.xz", "disk.qcow2"})
+
+	require.NoError(t, command.ExecuteContext(context.Background()))
+	assert.Equal(t, config.DefaultCatalogAttempts, captured.CatalogAttempts)
 }
 
 // TestCommandRejectsUnknownYAMLKeys proves selected configuration files are structurally strict.

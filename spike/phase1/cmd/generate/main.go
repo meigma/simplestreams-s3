@@ -295,7 +295,11 @@ func writeCatalog(root string, built *catalog) error {
 		}
 	}
 
-	if err := os.WriteFile(filepath.Join(root, simplestreams.DefaultIndexPath.String()), built.indexBody, 0o644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(root, simplestreams.DefaultIndexPath.String()),
+		built.indexBody,
+		0o644,
+	); err != nil {
 		return fmt.Errorf("write index: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(root, built.result.ProductPath), built.productBody, 0o644); err != nil {

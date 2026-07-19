@@ -71,6 +71,16 @@ tasks:
     options:
       cache: false
 
+  integration:
+    command: 'go test -count 1 -run TestMinIOIntegration ./internal/adapter/s3store'
+    env:
+      SIMPLESTREAMS_S3_INTEGRATION: '1'
+    inputs:
+      - '@group(goSources)'
+    options:
+      cache: false
+      runInCI: true
+
   check:
     deps:
       - 'root:format'

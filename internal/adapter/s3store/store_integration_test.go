@@ -1,10 +1,13 @@
 package s3store
 
 import (
-	"context"
+	"encoding/json"
 	"hash/crc64"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 
@@ -15,26 +18,98 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 
+	"github.com/meigma/simplestreams-s3/internal/adapter/httpserver"
 	"github.com/meigma/simplestreams-s3/internal/config"
 	"github.com/meigma/simplestreams-s3/internal/failure"
 	"github.com/meigma/simplestreams-s3/internal/object"
+	"github.com/meigma/simplestreams-s3/internal/proxy"
 	"github.com/meigma/simplestreams-s3/internal/publish"
+	"github.com/meigma/simplestreams-s3/internal/testfixture"
 )
 
 const (
-	integrationEnabled   = "SIMPLESTREAMS_S3_INTEGRATION"
-	integrationImage     = "minio/minio:RELEASE.2025-04-22T22-12-26Z"
-	integrationUser      = "integration-user"
-	integrationPassword  = "integration-password"
-	integrationBucket    = "private-images"
-	integrationCRC64Poly = 0x9a6c_9329_ac4b_c9b5
+	integrationEnabled             = "SIMPLESTREAMS_S3_INTEGRATION"
+	integrationImage               = "minio/minio:RELEASE.2025-04-22T22-12-26Z"
+	integrationUser                = "integration-user"
+	integrationPassword            = "integration-password"
+	integrationBucket              = "private-images"
+	integrationCRC64Poly           = 0x9a6c_9329_ac4b_c9b5
+	integrationUploadThreshold     = int64(1 << 20)
+	integrationExpectedObjectCount = 4
 )
 
-// TestStoreIntegrationExercisesCreateHeadAndGet proves the AWS adapter against a disposable S3-compatible service.
-func TestStoreIntegrationExercisesCreateHeadAndGet(t *testing.T) {
+// minIOTestContext groups the disposable service and configured adapter.
+type minIOTestContext struct {
+	store *Store
+}
+
+// integrationHTTPResponse captures one observable proxy response.
+type integrationHTTPResponse struct {
+	status int
+	header http.Header
+	body   []byte
+}
+
+// TestMinIOIntegrationPublishesAndProxiesCatalog proves the full test-only storage contract.
+func TestMinIOIntegrationPublishesAndProxiesCatalog(t *testing.T) {
 	if os.Getenv(integrationEnabled) != "1" {
-		t.Skip("set SIMPLESTREAMS_S3_INTEGRATION=1 to run the containerized S3 adapter test")
+		t.Skip("set SIMPLESTREAMS_S3_INTEGRATION=1 to run the containerized S3 integration test")
 	}
+	testContext := newMinIOTestContext(t)
+	metadataPath, diskPath := testfixture.WriteSplitVM(t, t.TempDir(), testfixture.DefaultVMOptions())
+	publisher := publish.NewService(testContext.store, "")
+
+	result, err := publisher.Publish(t.Context(), publish.Request{
+		MetadataPath: metadataPath,
+		DiskPath:     diskPath,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "alpinelinux:3.22:cloud:arm64", result.ProductName.String())
+	assert.Equal(t, "202607181302", result.VersionID.String())
+	assertPublishedObjectSet(t, testContext)
+
+	server := httptest.NewServer(httpserver.NewHandler(proxy.NewService(testContext.store, "")))
+	t.Cleanup(server.Close)
+	get := performIntegrationRequest(t, http.MethodGet, server.URL+"/streams/v1/index.json")
+	assert.Equal(t, http.StatusOK, get.status)
+	assert.Equal(t, "application/json", get.header.Get("Content-Type"))
+	assert.True(t, json.Valid(get.body))
+	var indexDocument map[string]any
+	require.NoError(t, json.Unmarshal(get.body, &indexDocument))
+	assert.Equal(t, "index:1.0", indexDocument["format"])
+
+	head := performIntegrationRequest(t, http.MethodHead, server.URL+"/streams/v1/index.json")
+	assert.Equal(t, http.StatusOK, head.status)
+	assert.Empty(t, head.body)
+	assert.Equal(t, get.header.Get("Content-Length"), head.header.Get("Content-Length"))
+
+	missing := performIntegrationRequest(t, http.MethodGet, server.URL+"/streams/v1/missing.json")
+	assert.Equal(t, http.StatusNotFound, missing.status)
+	assert.JSONEq(t, `{"code":"not_found"}`, string(missing.body))
+
+	unsafe := performIntegrationRequest(t, http.MethodGet, server.URL+"/%2e%2e/streams/v1/index.json")
+	assert.Equal(t, http.StatusBadRequest, unsafe.status)
+	assert.JSONEq(t, `{"code":"invalid_input"}`, string(unsafe.body))
+
+	_, err = publisher.Publish(t.Context(), publish.Request{
+		MetadataPath: metadataPath,
+		DiskPath:     diskPath,
+	})
+	require.Error(t, err)
+	assert.Equal(t, failure.KindCatalogConflict, failure.KindOf(err))
+
+	key, err := object.NewObjectKey("integration/create-only.json")
+	require.NoError(t, err)
+	input := integrationCreateObject(t, key, []byte("create-only"))
+	require.NoError(t, testContext.store.Create(t.Context(), input))
+	err = testContext.store.Create(t.Context(), input)
+	require.Error(t, err)
+	assert.Equal(t, failure.KindPrecondition, failure.KindOf(err))
+}
+
+// newMinIOTestContext starts MinIO, creates one bucket, and configures the test-only adapter profile.
+func newMinIOTestContext(t *testing.T) *minIOTestContext {
+	t.Helper()
 	ctx := t.Context()
 	container, err := tcminio.Run(
 		ctx,
@@ -54,37 +129,48 @@ func TestStoreIntegrationExercisesCreateHeadAndGet(t *testing.T) {
 		ctx,
 		integrationRuntime(t),
 		config.DefaultCatalogTimeout,
-		clientOptions{baseEndpoint: "http://" + endpoint, pathStyle: true},
+		clientOptions{
+			baseEndpoint:    "http://" + endpoint,
+			pathStyle:       true,
+			uploadThreshold: integrationUploadThreshold,
+		},
 	)
 	require.NoError(t, err)
 	_, err = store.client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(integrationBucket)})
 	require.NoError(t, err)
+	return &minIOTestContext{store: store}
+}
 
-	key, err := object.NewObjectKey("streams/v1/index.json")
+// assertPublishedObjectSet proves publication made exactly one complete mirror visible.
+func assertPublishedObjectSet(t *testing.T, testContext *minIOTestContext) {
+	t.Helper()
+	output, err := testContext.store.client.ListObjectsV2(t.Context(), &s3.ListObjectsV2Input{
+		Bucket: aws.String(integrationBucket),
+	})
 	require.NoError(t, err)
-	body := []byte("catalog")
-	input := integrationCreateObject(t, key, body)
-	exists, err := store.Exists(ctx, key)
-	require.NoError(t, err)
-	assert.False(t, exists)
-	require.NoError(t, store.Create(ctx, input))
+	keys := make([]string, 0, len(output.Contents))
+	for _, item := range output.Contents {
+		keys = append(keys, aws.ToString(item.Key))
+	}
+	sort.Strings(keys)
+	require.Len(t, keys, integrationExpectedObjectCount)
+	assert.Equal(t, "streams/v1/index.json", keys[3])
+	assert.True(t, strings.HasPrefix(keys[0], "images/"))
+	assert.True(t, strings.HasPrefix(keys[1], "images/"))
+	assert.True(t, strings.HasPrefix(keys[2], "streams/v1/images-"))
+}
 
-	exists, err = store.Exists(ctx, key)
+// performIntegrationRequest sends one HTTP request and consumes its response body.
+func performIntegrationRequest(t *testing.T, method string, url string) integrationHTTPResponse {
+	t.Helper()
+	request, err := http.NewRequestWithContext(t.Context(), method, url, nil)
 	require.NoError(t, err)
-	assert.True(t, exists)
-	attributes, err := store.Head(ctx, key)
+	response, err := http.DefaultClient.Do(request)
 	require.NoError(t, err)
-	assert.EqualValues(t, len(body), attributes.Size.Int64())
-	result, err := store.Get(ctx, key)
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
 	require.NoError(t, err)
-	read, err := io.ReadAll(result.Body)
-	require.NoError(t, err)
-	require.NoError(t, result.Body.Close())
-	assert.Equal(t, body, read)
-
-	err = store.Create(context.Background(), input)
-	require.Error(t, err)
-	assert.Equal(t, failure.KindPrecondition, failure.KindOf(err))
+	return integrationHTTPResponse{status: response.StatusCode, header: response.Header, body: body}
 }
 
 // integrationRuntime constructs one validated local endpoint configuration.

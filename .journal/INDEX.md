@@ -8,5 +8,5 @@
 | 004 | 2026-07-19 | Phase 3 publication updates | complete | Delivered and merged idempotent, concurrent existing-catalog publication with MinIO and real-AWS conditional-write proof. |
 | 005 | 2026-07-19 | Phase 4 proxy behavior | complete | Merged PR #10 delivering the bounded production proxy and real Incus acceptance proof. |
 | 006 | 2026-07-19 | Phase 5 delivery | complete | Merged optional OTLP metrics, complete V1 operator guidance, and required race, security, release, and real-Incus acceptance evidence. |
-| 007 | 2026-07-19 | New session | in-progress | Session opened; awaiting the user's first request. |
+| 007 | 2026-07-19 | Operator documentation, licensing, and ghd removal | complete | Merged validated Diátaxis operator docs, a restructured dual-licensed README, and removal of the ghd release tooling. |
 | 008 | 2026-07-19 | Custom GitHub Action | in-progress | Create and validate a custom GitHub Action for simplestreams-s3. |

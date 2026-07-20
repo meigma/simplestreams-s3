@@ -24,7 +24,8 @@ func TestEveryNamedGoDeclarationHasAContractComment(t *testing.T) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == ".wt" || entry.Name() == "vendor") {
+		if entry.IsDir() &&
+			(entry.Name() == ".git" || entry.Name() == ".wt" || entry.Name() == "node_modules" || entry.Name() == "vendor") {
 			return filepath.SkipDir
 		}
 		if entry.IsDir() || filepath.Ext(path) != ".go" {

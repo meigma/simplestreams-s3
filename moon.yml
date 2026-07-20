@@ -31,7 +31,6 @@ fileGroups:
     - 'mise.lock'
   releaseConfig:
     - '.goreleaser.yaml'
-    - 'ghd.toml'
     - 'release-please-config.json'
     - '.release-please-manifest.json'
     - '.github/workflows.disabled/**/*.yml'

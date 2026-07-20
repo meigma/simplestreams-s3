@@ -109,10 +109,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
-      - name: Stage and validate ghd release assets
+      - name: Stage and validate release assets
         env:
           RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
-        run: python3 .github/scripts/stage_ghd_release_assets.py --tag "$RELEASE_TAG"
+        run: python3 .github/scripts/stage_release_assets.py --tag "$RELEASE_TAG"
 
       - name: Smoke test release binary
         env:
@@ -435,7 +435,6 @@ jobs:
             echo "gh release view $RELEASE_TAG --repo $GITHUB_REPOSITORY --json isDraft,assets"
             echo "asset=\"simplestreams-s3_${RELEASE_VERSION}_\$(go env GOOS)_\$(go env GOARCH)\""
             echo "gh attestation verify \"dist/release-assets/\${asset}\" --repo \"$GITHUB_REPOSITORY\" --signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/attest.yml\" --source-ref \"refs/tags/$RELEASE_TAG\" --deny-self-hosted-runners"
-            echo "ghd download \"$GITHUB_REPOSITORY/simplestreams-s3@${RELEASE_VERSION}\" --output \"\$(mktemp -d)\""
             echo '```'
             echo
             echo "Container verification commands:"

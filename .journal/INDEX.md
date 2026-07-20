@@ -9,3 +9,4 @@
 | 005 | 2026-07-19 | Phase 4 proxy behavior | complete | Merged PR #10 delivering the bounded production proxy and real Incus acceptance proof. |
 | 006 | 2026-07-19 | Phase 5 delivery | complete | Merged optional OTLP metrics, complete V1 operator guidance, and required race, security, release, and real-Incus acceptance evidence. |
 | 007 | 2026-07-19 | New session | in-progress | Session opened; awaiting the user's first request. |
+| 008 | 2026-07-19 | Custom GitHub Action | in-progress | Create and validate a custom GitHub Action for simplestreams-s3. |

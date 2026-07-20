@@ -67,9 +67,10 @@ and `Expires`. No other S3 metadata is forwarded.
 | `405` | method other than `GET`/`HEAD` | `method_not_allowed` |
 | `412` | precondition failed | `precondition_failed` |
 | `416` | range not satisfiable | `range_not_satisfiable` |
-| `500` | unexpected local failure | `internal_failure` |
-| `502` | S3 rejected the proxy's authorization or failed non-retryably | `unauthorized_upstream` |
-| `503` | stream limit reached, S3 unavailable after retries, or draining; sent with `Retry-After: 1` | `unavailable` |
+| `500` | unexpected local or non-retryable S3 failure | `internal_failure` |
+| `502` | S3 rejected the proxy's credentials or signature | `unauthorized_upstream` |
+| `503` | concurrent-stream limit reached; sent with `Retry-After: 1` | `stream_limit` |
+| `503` | S3 unavailable after retries; sent with `Retry-After: 1` | `unavailable` |
 | `504` | S3 timed out after retries | `deadline_exceeded` |
 
 Error bodies are `{"code":"<code>","request_id":"<id>"}`, except for `HEAD`
@@ -114,8 +115,9 @@ never affect serving or readiness. The shutdown flush is bounded by
 | `simplestreams_s3.streams.incomplete` | counter | {stream} | downloads terminated before completion |
 | `simplestreams_s3.readiness` | gauge | 1 | cached readiness (0 or 1) |
 
-HTTP instruments carry `http.request.method`, `http.route`,
-`http.response.status_code`, `url.scheme`, and network-protocol attributes.
+The HTTP duration and body-size histograms carry `http.request.method`,
+`http.route`, `http.response.status_code`, `url.scheme`, and
+network-protocol attributes; the active-requests gauge carries none.
 S3 instruments carry `aws.operation`, `outcome`, and `error.kind`. All
 attribute values are fixed vocabularies: object keys, bucket names, and error
 text never appear. Resource attributes are `service.name` and

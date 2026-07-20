@@ -48,11 +48,11 @@ unreachable; readiness is reported separately.
 | `GET /healthz` | Liveness: the process and listener are up. Never touches S3. |
 | `GET /readyz` | Readiness: the cached catalog probe succeeded recently. |
 
-`/readyz` returns `200` with `{"status":"ready"}`, or `503` with
-`{"status":"not_ready","reason":"<reason>"}` where the reason is one of
-`starting`, `s3_unavailable`, `catalog_missing`, `s3_misconfigured`, or
-`draining`. Point load-balancer checks at `/readyz` and liveness probes at
-`/healthz`.
+Point load-balancer checks at `/readyz` and liveness probes at `/healthz`.
+`/readyz` returns `200` while the cached catalog probe is fresh and `503`
+otherwise; the
+[proxy interface reference](proxy-interface.md#health-and-readiness) lists
+the body shape and failure reasons.
 
 Readiness is probed in the background every `proxy.readiness_interval`
 (default `10s`) and a success stays valid for `proxy.readiness_staleness`

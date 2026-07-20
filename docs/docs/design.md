@@ -81,7 +81,7 @@ republication. Setting `s3.expected_bucket_owner` applies AWS
 to every request.
 
 When S3 is unavailable the proxy fails and reports itself unready rather
-than serving stale data; it caches nothing.
+than serving stale data; it never caches catalog or object bytes.
 
 ## Non-goals
 

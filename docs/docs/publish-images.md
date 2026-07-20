@@ -59,14 +59,12 @@ published docsos:1.0:cloud:amd64 version 202507191833
 
 The product name is `<os>:<release>:<variant>:<arch>` from `metadata.yaml`,
 and the version is the image's `creation_date` rendered as UTC
-`YYYYMMDDHHMM`. Incus clients see the image under the alias
-`<os>/<release>/<variant>` plus an architecture-qualified form of the same
-alias.
+`YYYYMMDDHHMM`. The catalog records the alias `<os>/<release>/<variant>`;
+Incus itself additionally lists an architecture-qualified form of it.
 
-One invocation publishes exactly one image. Publication writes two
-content-addressed artifacts and a content-addressed catalog snapshot, then
-activates them with a single conditional write to `streams/v1/index.json`.
-[Design](design.md) explains why this ordering is safe.
+One invocation publishes exactly one image, activated by a single atomic
+index write; [Design](design.md) explains why re-runs and concurrent
+publishers stay safe.
 
 ## Add aliases
 

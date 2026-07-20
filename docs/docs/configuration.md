@@ -56,7 +56,7 @@ metrics:
 | YAML key | Flag | Environment variable | Default | Constraint |
 |---|---|---|---|---|
 | `publish.aliases` | `--alias` (repeatable) | `SIMPLESTREAMS_S3_ALIASES` | none | no backslashes, commas, colons, or empty/dot path segments |
-| `publish.release_title` | `--release-title` | `SIMPLESTREAMS_S3_RELEASE_TITLE` | image release | |
+| `publish.release_title` | `--release-title` | `SIMPLESTREAMS_S3_RELEASE_TITLE` | the image's `release` value | |
 | `publish.timeout` | `--publish-timeout` | `SIMPLESTREAMS_S3_PUBLISH_TIMEOUT` | `2h` | > 0 |
 | `publish.catalog_timeout` | `--catalog-timeout` | `SIMPLESTREAMS_S3_CATALOG_TIMEOUT` | `30s` | > 0 |
 | `publish.catalog_attempts` | `--catalog-attempts` | `SIMPLESTREAMS_S3_CATALOG_ATTEMPTS` | `4` | ≥ 1 |
@@ -103,9 +103,11 @@ the QCOW2 disk. The inputs must satisfy:
 - `architecture` and `properties.architecture` agree and resolve to
   `amd64`/`x86_64` or `arm64`/`aarch64`.
 - `properties.os`, `properties.release`, `properties.variant`, and
-  `properties.description` are non-empty; `creation_date` is a positive Unix
-  timestamp.
-- The disk is QCOW2 (version 1–3) with a non-zero virtual size.
+  `properties.description` are non-empty; the first three contain no `:`,
+  `/`, or `\` and no surrounding whitespace; `creation_date` is a positive
+  Unix timestamp.
+- The disk is QCOW2 (version 1–3) with a non-zero virtual size and a cluster
+  size between 512 bytes and 2 MiB.
 
 On success it prints `published <product> version <version>` and exits 0.
 All errors exit 1 with the reason on stderr.

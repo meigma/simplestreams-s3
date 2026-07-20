@@ -8,7 +8,8 @@ title: simplestreams-s3 documentation
 Amazon S3 bucket and serves the resulting Simple Streams catalog over HTTP, so
 Incus clients can list and import those images without any public S3 access.
 
-One static binary provides two commands:
+One static binary provides two operational commands, plus
+`simplestreams-s3 version` for build information:
 
 - `simplestreams-s3 publish` validates one split VM image (metadata tarball
   plus QCOW2 disk) and publishes it into the mirror. Publication is idempotent
@@ -28,7 +29,7 @@ covers the requirements.
 ## Install
 
 Releases publish four static binaries (`linux` and `darwin`, `amd64` and
-`arm64`) with checksums, SBOMs, signatures, and provenance attestations on the
+`arm64`) with checksums, SBOMs, and provenance attestations on the
 [releases page](https://github.com/meigma/simplestreams-s3/releases), and a
 signed multi-architecture container image at
 `ghcr.io/meigma/simplestreams-s3`. The image runs

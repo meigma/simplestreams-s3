@@ -1,0 +1,29 @@
+name: Install simplestreams-s3
+description: Install a verified simplestreams-s3 CLI release
+author: Meigma
+
+# Add your action's branding here. This will appear on the GitHub Marketplace.
+branding:
+  icon: upload-cloud
+  color: blue
+
+# Define your inputs here.
+inputs:
+  version:
+    description: CLI version to install (latest, X.Y.Z, or vX.Y.Z)
+    required: false
+    default: latest
+  github-token:
+    description: Optional token for GitHub release API and download requests
+    required: false
+
+# Define your outputs here.
+outputs:
+  cli-version:
+    description: Concrete installed CLI version
+  cli-path:
+    description: Absolute path to the installed CLI
+
+runs:
+  using: node24
+  main: dist/index.js

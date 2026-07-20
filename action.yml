@@ -10,9 +10,9 @@ branding:
 # Define your inputs here.
 inputs:
   version:
-    description: CLI version to install (latest, X.Y.Z, or vX.Y.Z)
+    description: CLI version to install (paired release, latest, X.Y.Z, or vX.Y.Z)
     required: false
-    default: latest
+    default: 0.1.0 # x-release-please-version
   github-token:
     description: Optional token for GitHub release API and download requests
     required: false
@@ -82,4 +82,4 @@ outputs:
 
 runs:
   using: node24
-  main: dist/index.js
+  main: action/dist/index.js

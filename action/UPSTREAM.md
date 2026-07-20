@@ -16,9 +16,9 @@ release script, local-action development utility, and repository administration
 files were not imported. The unused local-action dependency also carried
 avoidable vulnerable transitive packages at import time. The example
 implementation was replaced by the `simplestreams-s3` release installer.
-Repository-level CI and independent Release Please workflows are adapted under
-the root `.github/workflows/` directory because GitHub does not load workflows
-from `action/.github/workflows/`.
+Repository-level CI and the unified repository release workflows are adapted
+under the root `.github/workflows/` directory because GitHub does not load
+workflows from `action/.github/workflows/`.
 
 This is a pinned source baseline, not a merge-tracked fork. Future template
 updates should be reviewed and imported deliberately.

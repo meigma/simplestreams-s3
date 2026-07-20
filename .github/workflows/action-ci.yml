@@ -123,6 +123,7 @@ jobs:
         id: first
         uses: ./
         with:
+          version: latest
           github-token: ${{ github.token }}
           metadata-path: ${{ runner.temp }}/action-fixture/incus.tar.xz
           disk-path: ${{ runner.temp }}/action-fixture/disk.qcow2
@@ -136,7 +137,7 @@ jobs:
         id: second
         uses: ./
         with:
-          version: v0.1.0
+          version: ${{ steps.first.outputs.cli-version }}
           github-token: ${{ github.token }}
           metadata-path: ${{ runner.temp }}/action-fixture/incus.tar.xz
           disk-path: ${{ runner.temp }}/action-fixture/disk.qcow2
@@ -158,7 +159,7 @@ jobs:
           SECOND_PRODUCT: ${{ steps.second.outputs.product }}
         run: |
           set -euo pipefail
-          test "$FIRST_CLI_VERSION" = '0.1.0'
+          [[ "$FIRST_CLI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]
           test "$FIRST_PRODUCT" = 'alpinelinux:3.22:cloud:arm64'
           test "$FIRST_IMAGE_VERSION" = '202607181302'
           test -x "$FIRST_CLI_PATH"
@@ -171,7 +172,8 @@ jobs:
         env:
           DRY_RUN: 'true'
           GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/update_major_version_tag.sh v0.1.0
+          RELEASE_TAG: v${{ steps.first.outputs.cli-version }}
+        run: bash .github/scripts/update_major_version_tag.sh "$RELEASE_TAG"
 
       - name: Verify published catalog
         run: >-
@@ -239,6 +241,7 @@ jobs:
         id: first-aws
         uses: ./
         with:
+          version: latest
           github-token: ${{ github.token }}
           metadata-path: ${{ runner.temp }}/action-fixture/incus.tar.xz
           disk-path: ${{ runner.temp }}/action-fixture/disk.qcow2
@@ -253,7 +256,7 @@ jobs:
         id: second-aws
         uses: ./
         with:
-          version: v0.1.0
+          version: ${{ steps.first-aws.outputs.cli-version }}
           github-token: ${{ github.token }}
           metadata-path: ${{ runner.temp }}/action-fixture/incus.tar.xz
           disk-path: ${{ runner.temp }}/action-fixture/disk.qcow2
@@ -276,7 +279,7 @@ jobs:
           SECOND_PRODUCT: ${{ steps.second-aws.outputs.product }}
         run: |
           set -euo pipefail
-          test "$FIRST_CLI_VERSION" = '0.1.0'
+          [[ "$FIRST_CLI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]
           test "$FIRST_PRODUCT" = 'alpinelinux:3.22:cloud:arm64'
           test "$FIRST_IMAGE_VERSION" = '202607181302'
           test -x "$FIRST_CLI_PATH"

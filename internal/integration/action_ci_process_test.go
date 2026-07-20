@@ -24,15 +24,19 @@ const (
 // TestPrepareGitHubActionWorkflow creates the external MinIO bucket and action fixture.
 func TestPrepareGitHubActionWorkflow(t *testing.T) {
 	requireActionWorkflowTest(t)
-	fixtureDir := requireActionWorkflowEnvironment(t, actionFixtureDirEnvironment)
-	require.NoError(t, os.MkdirAll(fixtureDir, 0o700))
-	testfixture.WriteSplitVM(t, fixtureDir, testfixture.DefaultVMOptions())
+	writeActionWorkflowFixture(t)
 
 	client := newMinIOClient(t, requireActionWorkflowEnvironment(t, actionEndpointEnvironment))
 	_, err := client.CreateBucket(t.Context(), &s3.CreateBucketInput{
 		Bucket: aws.String(minIOBucket),
 	})
 	require.NoError(t, err)
+}
+
+// TestPrepareGitHubActionAWSWorkflow creates the fixture for a real AWS workflow run.
+func TestPrepareGitHubActionAWSWorkflow(t *testing.T) {
+	requireActionWorkflowTest(t)
+	writeActionWorkflowFixture(t)
 }
 
 // TestVerifyGitHubActionWorkflow verifies idempotent action publication in external MinIO.
@@ -63,4 +67,12 @@ func requireActionWorkflowEnvironment(t *testing.T, name string) string {
 	value := os.Getenv(name)
 	require.NotEmpty(t, value, "%s must be set", name)
 	return value
+}
+
+// writeActionWorkflowFixture writes the shared split-VM action fixture.
+func writeActionWorkflowFixture(t *testing.T) {
+	t.Helper()
+	fixtureDir := requireActionWorkflowEnvironment(t, actionFixtureDirEnvironment)
+	require.NoError(t, os.MkdirAll(fixtureDir, 0o700))
+	testfixture.WriteSplitVM(t, fixtureDir, testfixture.DefaultVMOptions())
 }

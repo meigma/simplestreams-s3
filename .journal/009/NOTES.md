@@ -62,3 +62,22 @@ Release candidate after dependency updates:
 - Exact-candidate CI, race detector, Incus acceptance, CodeQL, Pages, Kusari, binary dry run, Melange amd64/arm64 builds, and container-image dry run all passed. Required checks are green.
 
 Readiness verdict: Dependabot maintenance is complete and PR #11 is again ready for human review and merge. Do not merge or publish without explicit approval.
+
+## 2026-07-19 22:30 — First release executed and independently verified
+Approval: the user explicitly approved release PR #11 for merge and requested full release-process verification.
+
+Merge and orchestration:
+- Re-pinned PR #11 to reviewed head `0f245d33b7302635a11b8564f383939cb7fb5b54`, exact base `ce57c20`, four intended release files, CLEAN/mergeable state, and green required/full checks.
+- Squash-merged #11 with exact-head matching as `39df93839661498d48eaa12a81ce7dfca22d5d53`; local `master` is clean and synchronized with `origin/master` at that commit.
+- Release Please run 29719015444 succeeded, created tag `v0.1.0` at `39df938`, and created the intended draft GitHub release.
+- Tag-triggered production Release run 29719020137 succeeded. Resolve Release, binary assets, isolated binary provenance, signed Melange apk builds for amd64/arm64, multi-arch container publication and smoke test, keyless Cosign signing, image SBOM attestation, isolated image provenance, and inspection summary all passed.
+- Post-merge CI, GitHub Pages, and both CodeQL runs on `39df938` also succeeded.
+
+Independent output verification:
+- Draft release contains exactly nine assets: `checksums.txt`, four OS/architecture binaries, and four corresponding SPDX JSON SBOMs. All eight artifact/SBOM checksums passed, and each has one verified GitHub provenance attestation constrained to signer `.github/workflows/attest.yml`, source ref `refs/tags/v0.1.0`, source digest `39df938`, and GitHub-hosted runners.
+- Native Darwin arm64 binary succeeded for both `--version` and `version`, reporting `simplestreams-s3 0.1.0 (39df938...)` with the release build timestamp. All four SBOM files parsed as SPDX JSON with package inventories.
+- Public GHCR tag resolves to digest `sha256:aa15130151d02873c6111a8d7d6babaf0980a5460065b436cd68470cc08db2c7` with `linux/amd64` and `linux/arm64` manifests. An anonymous pull by digest succeeded, and both version commands reported `0.1.0` at `39df938`.
+- The image digest has one verified isolated SLSA provenance attestation, one verified SPDX SBOM attestation, and two valid keyless Cosign signatures matching the repository release workflow identity.
+- `gh release verify` correctly has no immutable-release attestation while the release remains draft; GitHub issues that release-level attestation only after manual publication. This is not a pipeline failure.
+
+Outcome: the first release pipeline executed correctly. `v0.1.0` artifacts and the GHCR image are built and verified; the GitHub release intentionally remains draft for final human publication or rejection.

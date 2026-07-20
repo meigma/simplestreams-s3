@@ -1,5 +1,5 @@
-name: Install simplestreams-s3
-description: Install a verified simplestreams-s3 CLI release
+name: Publish an Incus image with simplestreams-s3
+description: Install a verified CLI release and publish one split VM image to S3
 author: Meigma
 
 # Add your action's branding here. This will appear on the GitHub Marketplace.
@@ -16,6 +16,58 @@ inputs:
   github-token:
     description: Optional token for GitHub release API and download requests
     required: false
+  metadata-path:
+    description: Path to the xz-compressed Incus metadata tarball
+    required: true
+  disk-path:
+    description: Path to the QCOW2 disk
+    required: true
+  s3-bucket:
+    description: Existing private S3 bucket containing the mirror
+    required: true
+  config-file:
+    description: Optional simplestreams-s3 YAML configuration file
+    required: false
+  s3-prefix:
+    description: Owned mirror-root key prefix
+    required: false
+  s3-region:
+    description:
+      AWS region override; otherwise the AWS SDK default chain is used
+    required: false
+  s3-expected-bucket-owner:
+    description: Expected AWS account ID for the bucket
+    required: false
+  aliases:
+    description: Newline-separated additional Incus aliases
+    required: false
+  release-title:
+    description: Release title override
+    required: false
+  publish-timeout:
+    description: Overall publication deadline as a Go duration
+    required: false
+  catalog-timeout:
+    description: Catalog operation and cleanup deadline as a Go duration
+    required: false
+  catalog-attempts:
+    description: Maximum catalog compare-and-swap attempts
+    required: false
+  s3-max-attempts:
+    description: Maximum AWS SDK request attempts
+    required: false
+  s3-max-backoff:
+    description: Maximum AWS SDK retry backoff as a Go duration
+    required: false
+  s3-dial-timeout:
+    description: S3 connection establishment timeout as a Go duration
+    required: false
+  s3-tls-handshake-timeout:
+    description: S3 TLS handshake timeout as a Go duration
+    required: false
+  s3-response-header-timeout:
+    description: S3 response header timeout as a Go duration
+    required: false
 
 # Define your outputs here.
 outputs:
@@ -23,6 +75,10 @@ outputs:
     description: Concrete installed CLI version
   cli-path:
     description: Absolute path to the installed CLI
+  product:
+    description: Published Simple Streams product name
+  image-version:
+    description: Published image version derived from creation_date
 
 runs:
   using: node24

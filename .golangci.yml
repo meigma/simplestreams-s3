@@ -43,6 +43,10 @@ formatters:
       # Default: 100
       max-len: 120
 
+  exclusions:
+    paths:
+      - ^action/node_modules/
+
 linters:
   enable:
     - asasalint # checks for pass []any as any in variadic func(...any)
@@ -447,6 +451,8 @@ linters:
     presets:
       - std-error-handling
       - common-false-positives
+    paths:
+      - ^action/node_modules/
     # Excluding configuration per-path, per-linter, per-text and per-source.
     rules:
       - source: 'TODO'

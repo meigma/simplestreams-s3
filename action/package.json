@@ -1,7 +1,7 @@
 {
   "name": "simplestreams-s3-action",
   "description": "GitHub Action for publishing Incus images with simplestreams-s3",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "author": "Meigma",
   "type": "module",
   "private": true,

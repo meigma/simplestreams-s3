@@ -1,0 +1,69 @@
+# Required release app settings:
+# - vars.MEIGMA_RELEASE_APP_ID
+# - secrets.MEIGMA_RELEASE_APP_PRIVATE_KEY
+# - protected-tag ruleset bypass for the release app, because this workflow
+#   creates exact action-v* tags and updates the protected action-vN tag.
+
+name: Action Release Please
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - action/**
+      - .github/workflows/action-release-please.yml
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Create release app token
+        id: release-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.MEIGMA_RELEASE_APP_ID }}
+          private-key: ${{ secrets.MEIGMA_RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Run Release Please
+        id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.release-app.outputs.token }}
+          target-branch: master
+          config-file: action/release-please-config.json
+          manifest-file: action/.release-please-manifest.json
+
+      - name: Update moving major tag
+        if: ${{ steps.release.outputs['action--release_created'] == 'true' }}
+        env:
+          EXACT_TAG: ${{ steps.release.outputs['action--tag_name'] }}
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
+          MAJOR: ${{ steps.release.outputs['action--major'] }}
+          TARGET_SHA: ${{ steps.release.outputs['action--sha'] }}
+        run: |
+          set -euo pipefail
+          [[ "$MAJOR" =~ ^[0-9]+$ ]]
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXACT_TAG" =~ ^action-v${MAJOR}\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
+
+          major_tag="action-v${MAJOR}"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${major_tag}" >/dev/null 2>&1; then
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/git/refs/tags/${major_tag}" \
+              --field sha="$TARGET_SHA" \
+              --field force=true
+          else
+            gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/git/refs" \
+              --field ref="refs/tags/${major_tag}" \
+              --field sha="$TARGET_SHA"
+          fi

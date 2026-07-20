@@ -1,0 +1,162 @@
+name: Action CI
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - action/**
+      - .github/workflows/action-*.yml
+      - internal/integration/action_ci_process_test.go
+  push:
+    branches:
+      - master
+    paths:
+      - action/**
+      - .github/workflows/action-*.yml
+      - internal/integration/action_ci_process_test.go
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  action:
+    name: TypeScript and distribution
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: action
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: action/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run action checks
+        run: npm run ci
+
+  publish:
+    name: Released CLI publish and tool cache
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      AWS_ACCESS_KEY_ID: integration-user
+      AWS_SECRET_ACCESS_KEY: integration-password
+      AWS_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: 'true'
+      GOTOOLCHAIN: local
+      SIMPLESTREAMS_S3_ACTION_WORKFLOW_TEST: '1'
+      SIMPLESTREAMS_S3_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      SIMPLESTREAMS_S3_TEST_S3_PATH_STYLE: 'true'
+      SIMPLESTREAMS_S3_TEST_UPLOAD_THRESHOLD_BYTES: '1048576'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup mise
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          version: 2026.6.14
+          cache: true
+
+      - name: Start MinIO
+        run: |
+          set -euo pipefail
+          docker run --detach --rm \
+            --name simplestreams-s3-action-minio \
+            --publish 127.0.0.1:9000:9000 \
+            --env MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" \
+            --env MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
+            minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e \
+            server /data
+          curl --fail --retry 30 --retry-connrefused --retry-delay 1 \
+            http://127.0.0.1:9000/minio/health/live
+
+      - name: Prepare fixture and bucket
+        env:
+          SIMPLESTREAMS_S3_ACTION_FIXTURE_DIR: ${{ runner.temp }}/action-fixture
+        run: >-
+          go test -count=1 -tags integration
+          -run '^TestPrepareGitHubActionWorkflow$'
+          ./internal/integration
+
+      - name: Publish image
+        id: first
+        uses: ./action
+        with:
+          version: v0.1.0
+          github-token: ${{ github.token }}
+          metadata-path: ${{ runner.temp }}/action-fixture/incus.tar.xz
+          disk-path: ${{ runner.temp }}/action-fixture/disk.qcow2
+          s3-bucket: private-images
+          s3-region: us-east-1
+          aliases: |
+            alpinelinux/stable
+            alpinelinux/latest
+
+      - name: Publish the same image from the tool cache
+        id: second
+        uses: ./action
+        with:
+          version: v0.1.0
+          github-token: ${{ github.token }}
+          metadata-path: ${{ runner.temp }}/action-fixture/incus.tar.xz
+          disk-path: ${{ runner.temp }}/action-fixture/disk.qcow2
+          s3-bucket: private-images
+          s3-region: us-east-1
+          aliases: |
+            alpinelinux/stable
+            alpinelinux/latest
+
+      - name: Verify action outputs and cache reuse
+        env:
+          FIRST_CLI_PATH: ${{ steps.first.outputs.cli-path }}
+          FIRST_CLI_VERSION: ${{ steps.first.outputs.cli-version }}
+          FIRST_IMAGE_VERSION: ${{ steps.first.outputs.image-version }}
+          FIRST_PRODUCT: ${{ steps.first.outputs.product }}
+          SECOND_CLI_PATH: ${{ steps.second.outputs.cli-path }}
+          SECOND_CLI_VERSION: ${{ steps.second.outputs.cli-version }}
+          SECOND_IMAGE_VERSION: ${{ steps.second.outputs.image-version }}
+          SECOND_PRODUCT: ${{ steps.second.outputs.product }}
+        run: |
+          set -euo pipefail
+          test "$FIRST_CLI_VERSION" = '0.1.0'
+          test "$FIRST_PRODUCT" = 'alpinelinux:3.22:cloud:arm64'
+          test "$FIRST_IMAGE_VERSION" = '202607181302'
+          test -x "$FIRST_CLI_PATH"
+          test "$SECOND_CLI_PATH" = "$FIRST_CLI_PATH"
+          test "$SECOND_CLI_VERSION" = "$FIRST_CLI_VERSION"
+          test "$SECOND_PRODUCT" = "$FIRST_PRODUCT"
+          test "$SECOND_IMAGE_VERSION" = "$FIRST_IMAGE_VERSION"
+
+      - name: Verify published catalog
+        run: >-
+          go test -count=1 -tags integration
+          -run '^TestVerifyGitHubActionWorkflow$'
+          ./internal/integration
+
+      - name: Show MinIO logs on failure
+        if: failure()
+        run: docker logs simplestreams-s3-action-minio
+
+      - name: Stop MinIO
+        if: always()
+        run: docker stop simplestreams-s3-action-minio || true

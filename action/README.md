@@ -76,7 +76,7 @@ The project is derived from GitHub's canonical TypeScript Action template; see
 
 ```sh
 npm ci
-npm run all
+npm run ci
 ```
 
 The public release installer smoke test is opt-in:
@@ -88,3 +88,15 @@ npm run smoke:release
 The repository's build-tagged Go integration test invokes the packaged action
 twice against disposable MinIO. It proves real release installation, direct
 publish execution, tool-cache reuse, and idempotent catalog state.
+
+## Releases
+
+The action is versioned independently from the Go CLI. Release Please maintains
+`action/CHANGELOG.md`, `action/package.json`, and the action manifest, then
+creates exact tags such as `action-v1.0.0`. After that release is created, the
+same workflow moves the matching major tag, such as `action-v1`, to the exact
+release commit. The committed `dist/` bundle is the release artifact; the
+workflow does not publish an npm package or attach generated assets.
+
+The repository CI rebuilds `dist/` and rejects uncommitted differences. A
+release therefore contains only the bundle reviewed in its release PR.

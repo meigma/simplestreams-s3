@@ -28,6 +28,8 @@
   },
   "scripts": {
     "bundle": "npm run format:write && npm run package",
+    "check-dist": "npm run package && git diff --exit-code -- dist",
+    "ci": "npm run format:check && npm run lint && npm test && npm run check-dist && npm audit --audit-level=low",
     "ci-test": "NODE_OPTIONS=--experimental-vm-modules NODE_NO_WARNINGS=1 npx jest",
     "coverage": "npx make-coverage-badge --output-path ./badges/coverage.svg",
     "format:write": "npx prettier --write .",

@@ -35,10 +35,14 @@ theme:
 
 nav:
   - Home: index.md
-  - Operator guide: operator-guide.md
-  - Configuration reference: configuration.md
-  - Observability reference: observability.md
-  - Verification reference: verification.md
+  - How-to guides:
+      - Publish images: publish-images.md
+      - Deploy the proxy: deploy-the-proxy.md
+  - Reference:
+      - Configuration: configuration.md
+      - Proxy interface: proxy-interface.md
+  - Explanation:
+      - Design: design.md
 
 plugins:
   - search

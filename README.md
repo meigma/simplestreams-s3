@@ -14,7 +14,7 @@ Publication is idempotent and safe under compatible concurrent updates. Conflict
 
 The S3 bucket must remain private. Both commands authenticate through the AWS SDK default credential chain; static access keys are not application settings. The proxy does not authenticate downstream clients and does not terminate public TLS. Deploy it behind an ingress or network boundary that provides HTTPS and the required access-control policy.
 
-The configured bucket prefix is dedicated to one mirror and must not contain unrelated or sensitive objects. See the [operator guide](https://meigma.github.io/simplestreams-s3/operator-guide/) for the complete bucket, IAM, ingress, KMS, and multipart-cleanup requirements.
+The configured bucket prefix is dedicated to one mirror and must not contain unrelated or sensitive objects. See [Publish images](https://meigma.github.io/simplestreams-s3/publish-images/) and [Deploy the proxy](https://meigma.github.io/simplestreams-s3/deploy-the-proxy/) for the complete bucket, IAM, ingress, KMS, and multipart-cleanup requirements.
 
 ## Quick start
 
@@ -84,8 +84,6 @@ SIMPLESTREAMS_S3_REAL_AWS_REGION=us-west-2 \
 go test -count=1 -tags integration \
   -run TestRealAWSConditionalIndexWrite ./internal/integration
 ```
-
-See [verification](https://meigma.github.io/simplestreams-s3/verification/) for the complete V1 gate map.
 
 ## Release artifacts
 

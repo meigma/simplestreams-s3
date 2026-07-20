@@ -4,61 +4,114 @@ title: Configuration reference
 
 # Configuration reference
 
-Configuration precedence is fixed, highest first:
+Every public setting of `simplestreams-s3`.
 
-1. command flags;
-2. `SIMPLESTREAMS_S3_*` environment variables;
-3. one YAML file selected by `--config` or `SIMPLESTREAMS_S3_CONFIG`;
-4. defaults.
+## Sources and precedence
 
-There is no implicit file search or hot reload. A selected file that is absent, unreadable, malformed, or contains an unknown key is fatal. Environment lists use comma-separated values; YAML uses native lists.
+Each setting resolves from, highest first:
 
-| YAML key | Flag | Environment variable | Default |
-|---|---|---|---|
-| `s3.bucket` | `--s3-bucket` | `SIMPLESTREAMS_S3_BUCKET` | Required |
-| `s3.prefix` | `--s3-prefix` | `SIMPLESTREAMS_S3_PREFIX` | Empty |
-| `s3.region` | `--s3-region` | `SIMPLESTREAMS_S3_REGION` | AWS chain |
-| `s3.profile` | `--s3-profile` | `SIMPLESTREAMS_S3_PROFILE` | AWS chain |
-| `s3.expected_bucket_owner` | `--s3-expected-bucket-owner` | `SIMPLESTREAMS_S3_EXPECTED_BUCKET_OWNER` | Empty |
-| `s3.max_attempts` | `--s3-max-attempts` | `SIMPLESTREAMS_S3_MAX_ATTEMPTS` | `3` |
-| `s3.max_backoff` | `--s3-max-backoff` | `SIMPLESTREAMS_S3_MAX_BACKOFF` | `1s` |
-| `s3.dial_timeout` | `--s3-dial-timeout` | `SIMPLESTREAMS_S3_DIAL_TIMEOUT` | `3s` |
-| `s3.tls_handshake_timeout` | `--s3-tls-handshake-timeout` | `SIMPLESTREAMS_S3_TLS_HANDSHAKE_TIMEOUT` | `5s` |
-| `s3.response_header_timeout` | `--s3-response-header-timeout` | `SIMPLESTREAMS_S3_RESPONSE_HEADER_TIMEOUT` | `5s` |
-| `publish.aliases` | Repeated `--alias` | `SIMPLESTREAMS_S3_ALIASES` | Empty |
-| `publish.release_title` | `--release-title` | `SIMPLESTREAMS_S3_RELEASE_TITLE` | Image release |
-| `publish.catalog_attempts` | `--catalog-attempts` | `SIMPLESTREAMS_S3_CATALOG_ATTEMPTS` | `4` |
-| `publish.catalog_timeout` | `--catalog-timeout` | `SIMPLESTREAMS_S3_CATALOG_TIMEOUT` | `30s` |
-| `publish.timeout` | `--publish-timeout` | `SIMPLESTREAMS_S3_PUBLISH_TIMEOUT` | `2h` |
-| `proxy.listen` | `--listen` | `SIMPLESTREAMS_S3_LISTEN` | `:8080` |
-| `proxy.max_streams` | `--max-streams` | `SIMPLESTREAMS_S3_MAX_STREAMS` | `64` |
-| `proxy.read_header_timeout` | `--read-header-timeout` | `SIMPLESTREAMS_S3_READ_HEADER_TIMEOUT` | `5s` |
-| `proxy.idle_timeout` | `--idle-timeout` | `SIMPLESTREAMS_S3_IDLE_TIMEOUT` | `60s` |
-| `proxy.upstream_idle_timeout` | `--upstream-idle-timeout` | `SIMPLESTREAMS_S3_UPSTREAM_IDLE_TIMEOUT` | `30s` |
-| `proxy.write_idle_timeout` | `--write-idle-timeout` | `SIMPLESTREAMS_S3_WRITE_IDLE_TIMEOUT` | `30s` |
-| `proxy.max_header_bytes` | `--max-header-bytes` | `SIMPLESTREAMS_S3_MAX_HEADER_BYTES` | `32768` |
-| `proxy.shutdown_delay` | `--shutdown-delay` | `SIMPLESTREAMS_S3_SHUTDOWN_DELAY` | `5s` |
-| `proxy.shutdown_grace` | `--shutdown-grace` | `SIMPLESTREAMS_S3_SHUTDOWN_GRACE` | `30s` |
-| `proxy.readiness_interval` | `--readiness-interval` | `SIMPLESTREAMS_S3_READINESS_INTERVAL` | `10s` |
-| `proxy.readiness_timeout` | `--readiness-timeout` | `SIMPLESTREAMS_S3_READINESS_TIMEOUT` | `2s` |
-| `proxy.readiness_staleness` | `--readiness-staleness` | `SIMPLESTREAMS_S3_READINESS_STALENESS` | `30s` |
-| `logging.level` | `--log-level` | `SIMPLESTREAMS_S3_LOG_LEVEL` | `info` |
-| `metrics.endpoint` | `--metrics-endpoint` | `SIMPLESTREAMS_S3_METRICS_ENDPOINT` | Empty; disabled |
-| `metrics.interval` | `--metrics-interval` | `SIMPLESTREAMS_S3_METRICS_INTERVAL` | `30s` |
-| `metrics.timeout` | `--metrics-timeout` | `SIMPLESTREAMS_S3_METRICS_TIMEOUT` | `10s` |
-| `metrics.insecure` | `--metrics-insecure` | `SIMPLESTREAMS_S3_METRICS_INSECURE` | `false` |
+1. command-line flag;
+2. environment variable;
+3. the YAML file named by `--config` or `SIMPLESTREAMS_S3_CONFIG`;
+4. built-in default.
 
-## Validation rules
+No configuration file is read unless one is named explicitly, and the file is
+parsed as YAML regardless of extension. Unknown keys and invalid values fail
+startup.
 
-- `s3.bucket` must be a valid private general-purpose bucket name.
-- `s3.prefix` is empty or a slash-separated relative key prefix. Leading or trailing slashes, empty components, dot segments, and backslashes are rejected rather than cleaned.
-- Retry counts, stream/header limits, and all operational durations are positive.
-- `proxy.listen` is a valid `host:port` listener.
-- `proxy.readiness_staleness` is not shorter than `proxy.readiness_interval`.
-- `logging.level` is `debug`, `info`, `warn`, or `error`.
-- `metrics.endpoint` is a collector `host:port` without scheme or path.
-- `metrics.insecure` permits cleartext only when the configured endpoint host is `localhost` or an explicit loopback IP.
+Example file, usable by both commands:
 
-The HTTP server has no whole-response write timeout. `proxy.write_idle_timeout` bounds stalled downstream progress without limiting healthy multi-gigabyte downloads.
+```yaml
+s3:
+  bucket: private-images
+  region: us-west-2
+  prefix: mirrors/incus
+proxy:
+  listen: :8080
+  max_streams: 128
+logging:
+  level: info
+metrics:
+  endpoint: collector.internal:4318
+  interval: 30s
+```
 
-AWS credentials use the SDK default chain. Static access keys are not accepted as flags or YAML fields. OTLP headers use the standard `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_EXPORTER_OTLP_METRICS_HEADERS` environment variable and are never logged.
+## S3 settings (both commands)
+
+| YAML key | Flag | Environment variable | Default | Constraint |
+|---|---|---|---|---|
+| `s3.bucket` | `--s3-bucket` | `SIMPLESTREAMS_S3_BUCKET` | — | required; 3–63 characters |
+| `s3.prefix` | `--s3-prefix` | `SIMPLESTREAMS_S3_PREFIX` | empty | relative path; no leading/trailing slash, empty or dot segments, or backslashes |
+| `s3.region` | `--s3-region` | `SIMPLESTREAMS_S3_REGION` | SDK default | |
+| `s3.profile` | `--s3-profile` | `SIMPLESTREAMS_S3_PROFILE` | SDK default | |
+| `s3.expected_bucket_owner` | `--s3-expected-bucket-owner` | `SIMPLESTREAMS_S3_EXPECTED_BUCKET_OWNER` | empty | AWS account ID sent with every S3 request |
+| `s3.max_attempts` | `--s3-max-attempts` | `SIMPLESTREAMS_S3_MAX_ATTEMPTS` | `3` | ≥ 1 |
+| `s3.max_backoff` | `--s3-max-backoff` | `SIMPLESTREAMS_S3_MAX_BACKOFF` | `1s` | > 0 |
+| `s3.dial_timeout` | `--s3-dial-timeout` | `SIMPLESTREAMS_S3_DIAL_TIMEOUT` | `3s` | > 0 |
+| `s3.tls_handshake_timeout` | `--s3-tls-handshake-timeout` | `SIMPLESTREAMS_S3_TLS_HANDSHAKE_TIMEOUT` | `5s` | > 0 |
+| `s3.response_header_timeout` | `--s3-response-header-timeout` | `SIMPLESTREAMS_S3_RESPONSE_HEADER_TIMEOUT` | `5s` | > 0 |
+
+## Publish settings
+
+| YAML key | Flag | Environment variable | Default | Constraint |
+|---|---|---|---|---|
+| `publish.aliases` | `--alias` (repeatable) | `SIMPLESTREAMS_S3_ALIASES` | none | no backslashes, commas, colons, or empty/dot path segments |
+| `publish.release_title` | `--release-title` | `SIMPLESTREAMS_S3_RELEASE_TITLE` | image release | |
+| `publish.timeout` | `--publish-timeout` | `SIMPLESTREAMS_S3_PUBLISH_TIMEOUT` | `2h` | > 0 |
+| `publish.catalog_timeout` | `--catalog-timeout` | `SIMPLESTREAMS_S3_CATALOG_TIMEOUT` | `30s` | > 0 |
+| `publish.catalog_attempts` | `--catalog-attempts` | `SIMPLESTREAMS_S3_CATALOG_ATTEMPTS` | `4` | ≥ 1 |
+
+## Proxy settings
+
+| YAML key | Flag | Environment variable | Default | Constraint |
+|---|---|---|---|---|
+| `proxy.listen` | `--listen` | `SIMPLESTREAMS_S3_LISTEN` | `:8080` | `host:port` |
+| `proxy.max_streams` | `--max-streams` | `SIMPLESTREAMS_S3_MAX_STREAMS` | `64` | ≥ 1 |
+| `proxy.read_header_timeout` | `--read-header-timeout` | `SIMPLESTREAMS_S3_READ_HEADER_TIMEOUT` | `5s` | > 0 |
+| `proxy.idle_timeout` | `--idle-timeout` | `SIMPLESTREAMS_S3_IDLE_TIMEOUT` | `1m` | > 0 |
+| `proxy.upstream_idle_timeout` | `--upstream-idle-timeout` | `SIMPLESTREAMS_S3_UPSTREAM_IDLE_TIMEOUT` | `30s` | > 0 |
+| `proxy.write_idle_timeout` | `--write-idle-timeout` | `SIMPLESTREAMS_S3_WRITE_IDLE_TIMEOUT` | `30s` | > 0 |
+| `proxy.max_header_bytes` | `--max-header-bytes` | `SIMPLESTREAMS_S3_MAX_HEADER_BYTES` | `32768` | ≥ 1 |
+| `proxy.shutdown_delay` | `--shutdown-delay` | `SIMPLESTREAMS_S3_SHUTDOWN_DELAY` | `5s` | > 0 |
+| `proxy.shutdown_grace` | `--shutdown-grace` | `SIMPLESTREAMS_S3_SHUTDOWN_GRACE` | `30s` | > 0 |
+| `proxy.readiness_interval` | `--readiness-interval` | `SIMPLESTREAMS_S3_READINESS_INTERVAL` | `10s` | > 0 |
+| `proxy.readiness_timeout` | `--readiness-timeout` | `SIMPLESTREAMS_S3_READINESS_TIMEOUT` | `2s` | > 0 |
+| `proxy.readiness_staleness` | `--readiness-staleness` | `SIMPLESTREAMS_S3_READINESS_STALENESS` | `30s` | ≥ `proxy.readiness_interval` |
+
+## Logging and metrics settings (proxy only)
+
+| YAML key | Flag | Environment variable | Default | Constraint |
+|---|---|---|---|---|
+| `logging.level` | `--log-level` | `SIMPLESTREAMS_S3_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
+| `metrics.endpoint` | `--metrics-endpoint` | `SIMPLESTREAMS_S3_METRICS_ENDPOINT` | empty (disabled) | `host:port`, no scheme or path |
+| `metrics.interval` | `--metrics-interval` | `SIMPLESTREAMS_S3_METRICS_INTERVAL` | `30s` | > 0 |
+| `metrics.timeout` | `--metrics-timeout` | `SIMPLESTREAMS_S3_METRICS_TIMEOUT` | `10s` | > 0 |
+| `metrics.insecure` | `--metrics-insecure` | `SIMPLESTREAMS_S3_METRICS_INSECURE` | `false` | `true` requires a loopback `metrics.endpoint` |
+
+## Publish command
+
+```text
+simplestreams-s3 publish METADATA_TARBALL DISK_QCOW2
+```
+
+Exactly two positional arguments: the xz-compressed metadata tarball, then
+the QCOW2 disk. The inputs must satisfy:
+
+- The tarball is valid xz-compressed tar with exactly one root-level
+  `metadata.yaml` (at most 1 MiB; at most 64 MiB total expanded archive) and
+  no container or unified-image payloads.
+- `architecture` and `properties.architecture` agree and resolve to
+  `amd64`/`x86_64` or `arm64`/`aarch64`.
+- `properties.os`, `properties.release`, `properties.variant`, and
+  `properties.description` are non-empty; `creation_date` is a positive Unix
+  timestamp.
+- The disk is QCOW2 (version 1–3) with a non-zero virtual size.
+
+On success it prints `published <product> version <version>` and exits 0.
+All errors exit 1 with the reason on stderr.
+
+## Version command
+
+`simplestreams-s3 version` (or `--version`) prints
+`simplestreams-s3 <version> (<commit>) built <date>`. Release binaries carry
+injected values; source builds print `dev (none) built unknown`.

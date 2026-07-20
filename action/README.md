@@ -27,9 +27,8 @@ steps:
       aws-region: us-west-2
 
   - id: publish
-    uses: meigma/simplestreams-s3/action@<full-commit-sha> # action-v1.0.0 after release
+    uses: meigma/simplestreams-s3@v0
     with:
-      version: v0.1.0
       metadata-path: build/incus.tar.xz
       disk-path: build/disk.qcow2
       s3-bucket: private-images
@@ -39,14 +38,18 @@ steps:
         example/latest
 ```
 
-Until the independently versioned action is released, use `./action` from a
-checkout for repository-local testing. Consumers should pin a full repository
-commit SHA even after `action-v1` becomes available.
+The moving `v0` tag selects the newest public compatible `v0.x.y` repository
+release. Use an exact tag such as `v0.2.0` to select the action and CLI release
+together, or pin the full release commit SHA for an immutable dependency. Use
+`./` from a checkout for repository-local testing because `action.yml` lives at
+the repository root. The moving tag becomes available with the first public
+action-capable repository release.
 
 ## Interface
 
 Required inputs are `metadata-path`, `disk-path`, and `s3-bucket`. `version`
-defaults to `latest` and also accepts `X.Y.Z` or `vX.Y.Z`. `github-token` is an
+defaults to the exact CLI version paired with the selected repository release;
+it can be overridden with `latest`, `X.Y.Z`, or `vX.Y.Z`. `github-token` is an
 optional read token for GitHub release downloads; public releases work without
 it.
 
@@ -91,12 +94,16 @@ publish execution, tool-cache reuse, and idempotent catalog state.
 
 ## Releases
 
-The action is versioned independently from the Go CLI. Release Please maintains
-`action/CHANGELOG.md`, `action/package.json`, and the action manifest, then
-creates exact tags such as `action-v1.0.0`. After that release is created, the
-same workflow moves the matching major tag, such as `action-v1`, to the exact
-release commit. The committed `dist/` bundle is the release artifact; the
-workflow does not publish an npm package or attach generated assets.
+The action and Go CLI share the repository's `vX.Y.Z` releases. Release Please
+updates the root changelog and the paired default CLI version in `action.yml`.
+The existing release workflow builds, attests, and stages the CLI artifacts in a
+draft release. Publishing that inspected stable release moves the matching major
+compatibility tag, such as `v0`, to the exact release commit.
+
+The committed `action/dist/` bundle is the action artifact; no npm package or
+separate action asset is published. An action-only fix therefore creates a new
+repository patch release, deliberately keeping the wrapper and CLI versioned
+together.
 
 The repository CI rebuilds `dist/` and rejects uncommitted differences. A
 release therefore contains only the bundle reviewed in its release PR.

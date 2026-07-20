@@ -1,0 +1,40 @@
+# A public stable repository release is simultaneously a CLI and GitHub Action
+# release. Move the major compatibility tag only after the inspected draft has
+# been published; draft or failed releases can therefore never advance it.
+# Requires the existing Meigma Release App variable/private-key secret and its
+# protected v* tag-ruleset bypass.
+
+name: Major Version Tag
+
+on:
+  release:
+    types:
+      - published
+
+permissions: {}
+
+jobs:
+  update:
+    name: Update major compatibility tag
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out released repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Create release app token
+        id: release-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.MEIGMA_RELEASE_APP_ID }}
+          private-key: ${{ secrets.MEIGMA_RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Update major tag from the public exact release
+        env:
+          EXACT_TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
+        run: bash .github/scripts/update_major_version_tag.sh "$EXACT_TAG"

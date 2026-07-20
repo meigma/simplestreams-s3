@@ -7,7 +7,6 @@
   "draft": true,
   "always-update": true,
   "initial-version": "0.1.0",
-  "last-release-sha": "971dedcbe2060fbaf99154991b51b36ea7bc9e78",
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": true,
   "packages": {
@@ -15,12 +14,15 @@
       "package-name": "simplestreams-s3",
       "changelog-path": "CHANGELOG.md",
       "exclude-paths": [
-        "action",
         ".github",
         "internal/integration",
         "internal/quality"
       ],
-      "extra-files": ["melange.yaml", "apko.yaml"]
+      "extra-files": [
+        "melange.yaml",
+        "apko.yaml",
+        { "type": "generic", "path": "action.yml" }
+      ]
     }
   },
   "changelog-sections": [

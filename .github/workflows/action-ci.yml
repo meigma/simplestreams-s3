@@ -6,15 +6,23 @@ on:
     branches:
       - master
     paths:
+      - action.yml
       - action/**
-      - .github/workflows/action-*.yml
+      - .github/scripts/update_major_version_tag.sh
+      - .github/workflows/action-ci.yml
+      - .github/workflows/major-version-tag.yml
+      - release-please-config.json
       - internal/integration/action_ci_process_test.go
   push:
     branches:
       - master
     paths:
+      - action.yml
       - action/**
-      - .github/workflows/action-*.yml
+      - .github/scripts/update_major_version_tag.sh
+      - .github/workflows/action-ci.yml
+      - .github/workflows/major-version-tag.yml
+      - release-please-config.json
       - internal/integration/action_ci_process_test.go
 
 permissions: {}
@@ -37,6 +45,18 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Verify paired repository and CLI version
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          repository_version="$(jq -r '.["."]' .release-please-manifest.json)"
+          action_version="$(awk '
+            $1 == "version:" { in_version = 1; next }
+            in_version && $1 == "default:" { print $2; exit }
+          ' action.yml)"
+          [[ "$repository_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]
+          test "$action_version" = "$repository_version"
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -101,9 +121,8 @@ jobs:
 
       - name: Publish image
         id: first
-        uses: ./action
+        uses: ./
         with:
-          version: v0.1.0
           github-token: ${{ github.token }}
           metadata-path: ${{ runner.temp }}/action-fixture/incus.tar.xz
           disk-path: ${{ runner.temp }}/action-fixture/disk.qcow2
@@ -115,7 +134,7 @@ jobs:
 
       - name: Publish the same image from the tool cache
         id: second
-        uses: ./action
+        uses: ./
         with:
           version: v0.1.0
           github-token: ${{ github.token }}
@@ -147,6 +166,12 @@ jobs:
           test "$SECOND_CLI_VERSION" = "$FIRST_CLI_VERSION"
           test "$SECOND_PRODUCT" = "$FIRST_PRODUCT"
           test "$SECOND_IMAGE_VERSION" = "$FIRST_IMAGE_VERSION"
+
+      - name: Rehearse public release to major tag resolution
+        env:
+          DRY_RUN: 'true'
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/update_major_version_tag.sh v0.1.0
 
       - name: Verify published catalog
         run: >-
@@ -212,9 +237,8 @@ jobs:
 
       - name: Publish image to AWS S3
         id: first-aws
-        uses: ./action
+        uses: ./
         with:
-          version: v0.1.0
           github-token: ${{ github.token }}
           metadata-path: ${{ runner.temp }}/action-fixture/incus.tar.xz
           disk-path: ${{ runner.temp }}/action-fixture/disk.qcow2
@@ -227,7 +251,7 @@ jobs:
 
       - name: Repeat image publication from the tool cache
         id: second-aws
-        uses: ./action
+        uses: ./
         with:
           version: v0.1.0
           github-token: ${{ github.token }}

@@ -52,6 +52,33 @@ simplestreams-s3 proxy --listen :8080
 Both commands authenticate through the AWS SDK default credential chain;
 static access keys are not application settings.
 
+### GitHub Action
+
+The repository is also a TypeScript action that installs the CLI release paired
+with its Git ref and publishes one split image. Authenticate to AWS first, then
+invoke the repository directly:
+
+```yaml
+- uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6.2.2
+  with:
+    role-to-assume: ${{ secrets.PUBLISH_ROLE_ARN }}
+    aws-region: us-west-2
+
+- uses: meigma/simplestreams-s3@v0
+  with:
+    metadata-path: build/incus.tar.xz
+    disk-path: build/disk.qcow2
+    s3-bucket: private-images
+```
+
+The moving `v0` tag follows public compatible `v0.x.y` releases. An exact tag
+such as `v0.2.0` selects that repository and CLI release together. For the
+strongest supply-chain guarantee, pin the full release commit SHA and retain
+the exact version in a comment. The moving tag becomes available with the first
+public action-capable repository release. See the
+[action reference](action/README.md) for every input, output, and supported
+runner.
+
 ### Security boundary
 
 The S3 bucket must remain private, and the configured prefix must be dedicated

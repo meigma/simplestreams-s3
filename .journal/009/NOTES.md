@@ -46,3 +46,19 @@ Final release candidate evidence:
 - PR #11 is mergeable/CLEAN. Exact-head CI, race detector, Incus acceptance, CodeQL, Pages, Kusari, binary dry run, native Melange builds for amd64 and arm64, and container-image dry run all passed.
 
 Readiness verdict: PR #11 is ready for human review and merge. Do not merge or publish without explicit approval.
+
+## 2026-07-19 22:09 — Dependabot backlog cleared before release
+Scope: Systematically triage and merge every open Dependabot PR before the first release, while retaining the release approval gate.
+
+Method and evidence:
+- Enumerated six open Dependabot PRs. Each original branch predated the release-preparation work, so its original checks were treated as stale.
+- Processed PRs sequentially in numeric order. Before each merge, requested `@dependabot recreate`, verified the refreshed commit was signed by GitHub and had the latest evolving `master` as its sole parent, inspected its bounded dependency diff, and waited for exact-head CI, race, Incus acceptance, Pages, and Kusari checks.
+- Squash-merged with exact-head matching: #1 `actions/attest` 4.2.0 as `f0d010f`; #2 `actions/setup-go` 7.0.0 as `768ee9f`; #3 `goreleaser-action` 7.2.3 as `e1d4c6d`; #4 `docker/login-action` 4.4.0 as `4bed3a1`; #5 `mkdocs-material` 9.7.7 as `0738ef6`; and #6 `actions/cache` 6.1.0 as `ce57c20`.
+- Final open Dependabot PR query returned zero. Local `master` is clean and synchronized with `origin/master` at `ce57c2030bc8264ae662fc89729bc676c89a3f4e`.
+
+Release candidate after dependency updates:
+- Release Please run 29718362491 succeeded on final `master` and refreshed PR #11 to head `0f245d33b7302635a11b8564f383939cb7fb5b54`, exact base `ce57c20`.
+- PR #11 remains a clean, mergeable `0.1.0` release with the same four intended release files, one changelog release section, and retained dual-license package metadata.
+- Exact-candidate CI, race detector, Incus acceptance, CodeQL, Pages, Kusari, binary dry run, Melange amd64/arm64 builds, and container-image dry run all passed. Required checks are green.
+
+Readiness verdict: Dependabot maintenance is complete and PR #11 is again ready for human review and merge. Do not merge or publish without explicit approval.

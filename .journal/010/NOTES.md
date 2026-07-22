@@ -33,3 +33,8 @@ Next: Wait for exact-head PR #33 checks, especially Incus Acceptance and hosted 
 ## 2026-07-21 20:24 — PR 33 hosted verification
 PR #33 is CLEAN and mergeable at exact head `a4ff80ada354b751407cba5a5f463511ec9352bc`. Hosted repository CI, race detector, real Incus Acceptance, TypeScript/distribution, released-CLI Action publication, GitHub Pages, all CodeQL lanes, Kusari Inspector, and the aggregate CodeQL check passed. The real Incus gate listed and imported the image carrying the custom evidence item and retained the exact expected fingerprint.
 Boundary: The integration is implementation- and verification-complete for review. It remains unmerged and unreleased; consumers cannot use the new `simplestreams-s3` input until PR #33 is approved, merged, and included in a repository release.
+
+## 2026-07-21 21:12 — PR 33 merged
+PR #33 was squash-merged from the reviewed head `a4ff80ada354b751407cba5a5f463511ec9352bc` as `207c021fcc670510167a41b20583c6a0156f960a`. Local `master` was fast-forwarded to the merge commit, the remote feature branch was deleted, and the integrated `feat/evidence-manifest` worktree and local branch were removed.
+Verification: All workflows triggered by the merge commit passed: repository CI, race detector, real Incus Acceptance, TypeScript/distribution, released-CLI Action publication and cache reuse, GitHub Pages build/deployment, both CodeQL runs, and Release Please. The conditional real-AWS Action job remained skipped as designed.
+Boundary: The evidence consumer is now on `master`, but external Action consumers still need a `simplestreams-s3` release that contains `207c021` before they can use it through a stable tag.

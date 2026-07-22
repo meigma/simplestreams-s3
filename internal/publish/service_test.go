@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -225,6 +226,73 @@ func TestPublishMakesIndexVisibleOnlyAfterEveryReferencedObject(t *testing.T) {
 		assert.Len(t, body, int(created.Size.Int64()))
 		assert.Equal(t, created.SHA256, object.DigestBytes(body))
 	}
+}
+
+// TestPublishMakesEvidenceDiscoverableOnlyAfterEveryProof proves the companion is activated last.
+func TestPublishMakesEvidenceDiscoverableOnlyAfterEveryProof(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	metadataPath, diskPath := testfixture.WriteSplitVM(t, directory, testfixture.DefaultVMOptions())
+	manifestPath := testfixture.WriteEvidenceManifest(
+		t,
+		filepath.Join(directory, "evidence"),
+		metadataPath,
+		diskPath,
+		"pass",
+	)
+	store := &fakeStore{}
+	service := newTestService(store, "")
+	service.now = func() time.Time { return time.Date(2026, 7, 21, 20, 0, 0, 0, time.UTC) }
+
+	_, err := service.Publish(context.Background(), Request{
+		MetadataPath: metadataPath, DiskPath: diskPath, EvidenceManifestPath: manifestPath,
+	})
+	require.NoError(t, err)
+	require.Len(t, store.writes, 10)
+	for _, key := range store.writes[2:7] {
+		assert.Contains(t, key, "images/evidence/")
+		assert.NotContains(t, key, "evidence-manifest.json")
+	}
+	manifestKey := store.writes[7]
+	assert.True(t, strings.HasSuffix(manifestKey, ".evidence-manifest.json"))
+	assert.Contains(t, store.writes[8], "streams/v1/images-")
+	assert.Equal(t, "streams/v1/index.json", store.writes[9])
+
+	var publishedManifest map[string]any
+	require.NoError(t, json.Unmarshal(store.objects[manifestKey].body, &publishedManifest))
+	for _, entry := range publishedManifest["evidence"].([]any) {
+		path := entry.(map[string]any)["path"].(string)
+		assert.Contains(t, store.objects, path)
+	}
+	versions := publishedVersions(t, store)
+	version := versions["202607181302"].(map[string]any)
+	items := version["items"].(map[string]any)
+	manifestItem := items["evidence-manifest"].(map[string]any)
+	assert.Equal(t, manifestKey, manifestItem["path"])
+}
+
+// TestPublishRejectsFailedEvidenceBeforeStorage proves failed images cannot be published accidentally.
+func TestPublishRejectsFailedEvidenceBeforeStorage(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	metadataPath, diskPath := testfixture.WriteSplitVM(t, directory, testfixture.DefaultVMOptions())
+	manifestPath := testfixture.WriteEvidenceManifest(
+		t,
+		filepath.Join(directory, "evidence"),
+		metadataPath,
+		diskPath,
+		"fail",
+	)
+	store := &fakeStore{}
+	service := newTestService(store, "")
+
+	_, err := service.Publish(context.Background(), Request{
+		MetadataPath: metadataPath, DiskPath: diskPath, EvidenceManifestPath: manifestPath,
+	})
+	require.Error(t, err)
+	assert.Equal(t, failure.KindInvalidInput, failure.KindOf(err))
+	assert.Zero(t, store.openCalls)
+	assert.Empty(t, store.created)
 }
 
 // TestPublishFinishesLocalValidationBeforeContactingStorage proves invalid input causes no mutation or probe.

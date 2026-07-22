@@ -11,6 +11,7 @@ import (
 	simplestreams "github.com/meigma/go-simplestreams"
 	incusschema "github.com/meigma/go-simplestreams/schema/incus"
 
+	"github.com/meigma/simplestreams-s3/internal/evidence"
 	"github.com/meigma/simplestreams-s3/internal/failure"
 	"github.com/meigma/simplestreams-s3/internal/image"
 	"github.com/meigma/simplestreams-s3/internal/object"
@@ -37,11 +38,19 @@ type ArtifactLocation struct {
 	key  object.ObjectKey
 }
 
+// EvidenceManifestLocation is the custom companion item advertised on one image version.
+type EvidenceManifestLocation struct {
+	key    object.ObjectKey
+	size   object.ByteSize
+	sha256 object.SHA256Digest
+}
+
 // Documents contains the complete empty-catalog publication generation.
 type Documents struct {
 	productName ProductName
 	versionID   VersionID
 	artifacts   [2]ArtifactLocation
+	evidence    *EvidenceManifestLocation
 	changed     bool
 	snapshotKey object.ObjectKey
 	snapshot    []byte
@@ -88,6 +97,7 @@ func buildCandidate(
 	additionalAliases []Alias,
 	releaseTitle ReleaseTitle,
 	updated time.Time,
+	evidenceManifest *evidence.Artifact,
 ) (candidateCatalog, error) {
 	fingerprint, err := vm.Fingerprint()
 	if err != nil {
@@ -115,6 +125,7 @@ func buildCandidate(
 		metadataLocation,
 		diskLocation,
 		fingerprint,
+		evidenceManifest,
 	)
 	if err != nil {
 		return candidateCatalog{}, err
@@ -123,6 +134,7 @@ func buildCandidate(
 		productName: productName,
 		versionID:   versionID,
 		artifacts:   [2]ArtifactLocation{metadataLocation, diskLocation},
+		evidence:    evidenceLocation(evidenceManifest),
 		productFile: productFile,
 	}, nil
 }
@@ -159,6 +171,7 @@ func buildProductFile(
 	metadataLocation ArtifactLocation,
 	diskLocation ArtifactLocation,
 	fingerprint object.SHA256Digest,
+	evidenceManifest *evidence.Artifact,
 ) (*simplestreams.ProductFile, error) {
 	metadataPath, err := simplestreams.ParseRelativePath(metadataLocation.key.String())
 	if err != nil {
@@ -196,8 +209,21 @@ func buildProductFile(
 		Size:     &diskSize,
 		SHA256:   vm.Disk().SHA256().String(),
 	})
+	if evidenceManifest != nil {
+		evidencePath, pathErr := simplestreams.ParseRelativePath(evidenceManifest.Key().String())
+		if pathErr != nil {
+			return nil, failure.Wrap(failure.KindInternal, "derive evidence manifest path", pathErr)
+		}
+		evidenceSize := evidenceManifest.Size().Int64()
+		version.SetItem(evidence.ManifestItemName, &simplestreams.Item{
+			FileType: evidence.ManifestFileType,
+			Path:     evidencePath,
+			Size:     &evidenceSize,
+			SHA256:   evidenceManifest.SHA256().String(),
+		})
+	}
 
-	if validationErr := incusschema.ValidateRuntimeProductFile(productFile); validationErr != nil {
+	if validationErr := validateIncusProjection(productFile); validationErr != nil {
 		return nil, failure.Wrap(failure.KindInternal, "validate generated product document", validationErr)
 	}
 	return productFile, nil
@@ -249,6 +275,15 @@ func (documents Documents) VersionID() VersionID { return documents.versionID }
 // Artifacts returns the metadata and disk locations in fixed order.
 func (documents Documents) Artifacts() [2]ArtifactLocation { return documents.artifacts }
 
+// EvidenceManifest returns the optional custom companion item location.
+func (documents Documents) EvidenceManifest() *EvidenceManifestLocation {
+	if documents.evidence == nil {
+		return nil
+	}
+	location := *documents.evidence
+	return &location
+}
+
 // Changed reports whether publication needs a new snapshot and index commit.
 func (documents Documents) Changed() bool { return documents.changed }
 
@@ -269,6 +304,15 @@ func (location ArtifactLocation) Kind() image.ArtifactKind { return location.kin
 
 // Key returns the immutable mirror-relative object key.
 func (location ArtifactLocation) Key() object.ObjectKey { return location.key }
+
+// Key returns the immutable mirror-relative evidence-manifest key.
+func (location EvidenceManifestLocation) Key() object.ObjectKey { return location.key }
+
+// Size returns the evidence-manifest byte size.
+func (location EvidenceManifestLocation) Size() object.ByteSize { return location.size }
+
+// SHA256 returns the evidence-manifest digest.
+func (location EvidenceManifestLocation) SHA256() object.SHA256Digest { return location.sha256 }
 
 // String returns the alias wire value.
 func (alias Alias) String() string { return string(alias) }
@@ -292,6 +336,14 @@ func artifactLocation(artifact image.Artifact, suffix string) (ArtifactLocation,
 		return ArtifactLocation{}, failure.Wrap(failure.KindInternal, "derive artifact path", err)
 	}
 	return ArtifactLocation{kind: artifact.Kind(), key: key}, nil
+}
+
+// evidenceLocation reduces a publishable artifact to catalog-visible fields.
+func evidenceLocation(artifact *evidence.Artifact) *EvidenceManifestLocation {
+	if artifact == nil {
+		return nil
+	}
+	return &EvidenceManifestLocation{key: artifact.Key(), size: artifact.Size(), sha256: artifact.SHA256()}
 }
 
 // normalizeAliases deduplicates and sorts aliases for deterministic rendering.

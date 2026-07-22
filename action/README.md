@@ -38,6 +38,50 @@ steps:
         example/latest
 ```
 
+### Publish an attested image
+
+Generate the image first, then pass the released `attest-vm-image` handoff
+directly to this action:
+
+```yaml
+permissions:
+  attestations: write
+  contents: read
+  id-token: write
+
+steps:
+  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    with:
+      persist-credentials: false
+
+  # Build build/incus.tar.xz and build/disk.qcow2 here.
+
+  - id: attest
+    uses: meigma/attest-vm-image@2646b5c7b0afc58f20a821ab44a5d0780733bd79 # v1.1.0
+    with:
+      disk-path: build/disk.qcow2
+      metadata-path: build/incus.tar.xz
+      signer: github
+
+  - uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6.2.2
+    with:
+      role-to-assume: ${{ secrets.PUBLISH_ROLE_ARN }}
+      aws-region: us-west-2
+
+  - uses: meigma/simplestreams-s3@v0
+    with:
+      metadata-path: build/incus.tar.xz
+      disk-path: build/disk.qcow2
+      evidence-manifest-path: ${{ steps.attest.outputs.evidence-manifest-path }}
+      s3-bucket: private-images
+      s3-region: us-west-2
+```
+
+`attest-vm-image` failures stop the job normally. As a second boundary, this
+action rejects any supplied manifest whose result is not `pass`, whose disk or
+metadata digest differs from the image, or whose proof files no longer match
+their declared digests.
+
 The moving `v0` tag selects the newest public compatible `v0.x.y` repository
 release. Use an exact tag such as `v0.2.0` to select the action and CLI release
 together, or pin the full release commit SHA for an immutable dependency. Use
@@ -55,6 +99,7 @@ it.
 
 The publish controls map directly to the CLI and remain unset unless supplied:
 
+- `evidence-manifest-path`, the optional version-1 `attest-vm-image` handoff;
 - `config-file`, `s3-prefix`, `s3-region`, and `s3-expected-bucket-owner`;
 - newline-separated `aliases` and `release-title`;
 - `publish-timeout`, `catalog-timeout`, and `catalog-attempts`;

@@ -66,6 +66,32 @@ One invocation publishes exactly one image, activated by a single atomic
 index write; [Design](design.md) explains why re-runs and concurrent
 publishers stay safe.
 
+## Publish attestation evidence
+
+Pass the version-1 handoff produced by `attest-vm-image` to publish its proofs
+with the image:
+
+```sh
+simplestreams-s3 publish \
+  --s3-bucket private-images \
+  --s3-region us-west-2 \
+  --evidence-manifest evidence/evidence-manifest.json \
+  incus.tar.xz disk.qcow2
+```
+
+Before contacting S3, the publisher requires `result: pass`, checks that the
+manifest binds the exact disk and metadata SHA-256 values, and re-hashes every
+referenced proof. It uploads the proofs and optional build manifest under
+content-addressed keys, rewrites runner-local paths to mirror-relative paths,
+then advertises the rewritten document as an `evidence-manifest` item on the
+same product version. Incus ignores that custom item and continues to download
+only the metadata and disk; generic consumers can discover and fetch the full
+proof set from the catalog.
+
+Evidence can enrich a previously published version. After enrichment, a plain
+republication preserves the companion, while a different manifest for the same
+product version is rejected as a conflict.
+
 ## Add aliases
 
 Pass `--alias` (repeatable) when the product is first published:

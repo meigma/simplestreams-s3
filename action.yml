@@ -1,5 +1,5 @@
 name: Publish an Incus image with simplestreams-s3
-description: Install a verified CLI release and publish one split VM image to S3
+description: Install a verified CLI and publish one split VM image and its evidence to S3
 author: Meigma
 
 # Add your action's branding here. This will appear on the GitHub Marketplace.
@@ -22,6 +22,9 @@ inputs:
   disk-path:
     description: Path to the QCOW2 disk
     required: true
+  evidence-manifest-path:
+    description: Optional attest-vm-image evidence-manifest.json path
+    required: false
   s3-bucket:
     description: Existing private S3 bucket containing the mirror
     required: true

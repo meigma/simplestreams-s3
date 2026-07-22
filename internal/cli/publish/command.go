@@ -30,6 +30,10 @@ func NewCommand(run Runner) *cobra.Command {
 			if run == nil {
 				return errors.New("publish command is not configured")
 			}
+			evidenceManifestPath, err := command.Flags().GetString("evidence-manifest")
+			if err != nil {
+				return err
+			}
 			runtime, err := config.LoadPublish(command, vp)
 			if err != nil {
 				return err
@@ -37,10 +41,11 @@ func NewCommand(run Runner) *cobra.Command {
 			ctx, cancel := context.WithTimeout(command.Context(), runtime.Timeout)
 			defer cancel()
 			result, err := run(ctx, runtime, application.Request{
-				MetadataPath: args[0],
-				DiskPath:     args[1],
-				Aliases:      runtime.Aliases,
-				ReleaseTitle: runtime.ReleaseTitle,
+				MetadataPath:         args[0],
+				DiskPath:             args[1],
+				EvidenceManifestPath: evidenceManifestPath,
+				Aliases:              runtime.Aliases,
+				ReleaseTitle:         runtime.ReleaseTitle,
 			})
 			if err != nil {
 				return err
@@ -58,6 +63,7 @@ func NewCommand(run Runner) *cobra.Command {
 	addS3Flags(command.Flags())
 	command.Flags().StringSlice("alias", nil, "additional Incus alias (repeatable)")
 	command.Flags().String("release-title", "", "release title override")
+	command.Flags().String("evidence-manifest", "", "attest-vm-image evidence manifest")
 	command.Flags().Duration("publish-timeout", config.DefaultPublishTimeout, "overall publication deadline")
 	command.Flags().Duration("catalog-timeout", config.DefaultCatalogTimeout, "catalog operation and cleanup deadline")
 	command.Flags().Int("catalog-attempts", config.DefaultCatalogAttempts, "maximum catalog compare-and-swap attempts")

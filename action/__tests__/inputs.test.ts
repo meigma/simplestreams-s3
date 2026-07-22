@@ -31,6 +31,7 @@ describe('readActionInputs', () => {
       githubToken: undefined,
       metadataPath: '/images/incus.tar.xz',
       diskPath: '/images/disk.qcow2',
+      evidenceManifestPath: undefined,
       s3Bucket: 'private-images',
       configFile: undefined,
       s3Prefix: undefined,
@@ -64,6 +65,7 @@ describe('readActionInputs', () => {
       requestedVersion: 'version',
       githubToken: 'github-token',
       configFile: 'config-file',
+      evidenceManifestPath: 'evidence-manifest-path',
       s3Prefix: 's3-prefix',
       releaseTitle: 'release-title',
       s3ResponseHeaderTimeout: 's3-response-header-timeout'

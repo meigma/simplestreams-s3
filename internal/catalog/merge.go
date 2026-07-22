@@ -10,6 +10,7 @@ import (
 	simplestreams "github.com/meigma/go-simplestreams"
 	incusschema "github.com/meigma/go-simplestreams/schema/incus"
 
+	"github.com/meigma/simplestreams-s3/internal/evidence"
 	"github.com/meigma/simplestreams-s3/internal/failure"
 	"github.com/meigma/simplestreams-s3/internal/image"
 	"github.com/meigma/simplestreams-s3/internal/object"
@@ -28,6 +29,7 @@ type candidateCatalog struct {
 	productName ProductName
 	versionID   VersionID
 	artifacts   [2]ArtifactLocation
+	evidence    *EvidenceManifestLocation
 	productFile *simplestreams.ProductFile
 }
 
@@ -39,7 +41,24 @@ func Merge(
 	releaseTitle ReleaseTitle,
 	updated time.Time,
 ) (Documents, error) {
-	candidate, err := buildCandidate(vm, additionalAliases, releaseTitle, updated)
+	return MergeWithEvidence(current, vm, additionalAliases, releaseTitle, updated, nil)
+}
+
+// MergeWithEvidence adopts current and adds vm with an optional custom evidence companion.
+func MergeWithEvidence(
+	current Current,
+	vm image.VMImage,
+	additionalAliases []Alias,
+	releaseTitle ReleaseTitle,
+	updated time.Time,
+	bundle *evidence.Bundle,
+) (Documents, error) {
+	var manifest *evidence.Artifact
+	if bundle != nil {
+		value := bundle.Manifest()
+		manifest = &value
+	}
+	candidate, err := buildCandidate(vm, additionalAliases, releaseTitle, updated, manifest)
 	if err != nil {
 		return Documents{}, err
 	}
@@ -65,6 +84,7 @@ func Merge(
 			productName: candidate.productName,
 			versionID:   candidate.versionID,
 			artifacts:   candidate.artifacts,
+			evidence:    candidate.evidence,
 			snapshotKey: snapshotKey,
 			indexKey:    indexKey,
 		}, nil
@@ -109,10 +129,25 @@ func mergeProductFile(
 		existingProduct.Versions[candidateVersion.Name] = cloneVersion(candidateVersion)
 		return merged, true, nil
 	}
-	if !sameVersion(existingVersion, candidateVersion) {
+	if sameVersion(existingVersion, candidateVersion) {
+		return merged, false, nil
+	}
+	if !sameVersionWithoutEvidence(existingVersion, candidateVersion) {
 		return nil, false, catalogConflict("merge product", "product version already has different artifacts")
 	}
-	return merged, false, nil
+	existingEvidence, existingHasEvidence := existingVersion.Items[evidence.ManifestItemName]
+	candidateEvidence, candidateHasEvidence := candidateVersion.Items[evidence.ManifestItemName]
+	switch {
+	case !existingHasEvidence && candidateHasEvidence:
+		existingVersion.Items[evidence.ManifestItemName] = cloneItem(candidateEvidence)
+		return merged, true, nil
+	case existingHasEvidence && !candidateHasEvidence:
+		return merged, false, nil
+	case existingHasEvidence && candidateHasEvidence && !sameItem(existingEvidence, candidateEvidence):
+		return nil, false, catalogConflict("merge product", "product version already has different evidence")
+	default:
+		return merged, false, nil
+	}
 }
 
 // validateCurrent rejects catalogs that cannot be safely adopted as the V1 owned namespace.
@@ -149,7 +184,7 @@ func validateOwnedProductDocument(current Current, entry *simplestreams.IndexEnt
 		current.ProductFile.DataType != incusschema.DataTypeImageDownloads {
 		return catalogConflict("adopt catalog", "images product document identity is incompatible")
 	}
-	if err := incusschema.ValidateRuntimeProductFile(current.ProductFile); err != nil {
+	if err := validateIncusProjection(current.ProductFile); err != nil {
 		return failure.Wrap(failure.KindCatalogConflict, "validate adopted product document", err)
 	}
 	if err := validateCatalogTimestamps(current); err != nil {
@@ -217,10 +252,11 @@ func validateVMProduct(productName string, product *simplestreams.Product) ([]Al
 	return aliases, nil
 }
 
-// validateVMVersion verifies the exact two-item split-VM wire shape.
+// validateVMVersion verifies the split-VM items and optional evidence companion.
 func validateVMVersion(versionName string, version *simplestreams.Version) error {
-	if version == nil || version.Name != versionName || len(version.Metadata) != 0 || len(version.Items) != 2 {
-		return catalogConflict("adopt version", "version is not the exact V1 VM item set")
+	if version == nil || version.Name != versionName || len(version.Metadata) != 0 ||
+		(len(version.Items) != 2 && len(version.Items) != 3) {
+		return catalogConflict("adopt version", "version is not the supported VM item set")
 	}
 	if _, err := time.Parse("200601021504", versionName); err != nil {
 		return failure.Wrap(failure.KindCatalogConflict, "validate adopted version identity", err)
@@ -248,6 +284,32 @@ func validateVMVersion(versionName string, version *simplestreams.Version) error
 	}
 	if len(diskItem.Metadata) != 0 {
 		return catalogConflict("adopt version", "disk item has incompatible fields")
+	}
+	evidenceItem, hasEvidence := version.Items[evidence.ManifestItemName]
+	if len(version.Items) == 3 && !hasEvidence {
+		return catalogConflict("adopt version", "version contains an unsupported companion item")
+	}
+	if hasEvidence {
+		if err := validateEvidenceItem(evidenceItem); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateEvidenceItem verifies the sole custom version item and its content address.
+func validateEvidenceItem(item *simplestreams.Item) error {
+	if item == nil || item.FileType != evidence.ManifestFileType || item.Size == nil || *item.Size <= 0 ||
+		item.MD5 != "" || item.SHA512 != "" || len(item.Mirrors) != 0 || len(item.Metadata) != 0 {
+		return catalogConflict("adopt evidence manifest", "evidence item fields are incompatible")
+	}
+	digest, err := object.ParseSHA256Digest(item.SHA256)
+	if err != nil {
+		return failure.Wrap(failure.KindCatalogConflict, "validate adopted evidence digest", err)
+	}
+	want := "images/evidence/" + digest.String() + ".evidence-manifest.json"
+	if item.Path.String() != want {
+		return catalogConflict("adopt evidence manifest", "evidence path is not its content address")
 	}
 	return nil
 }
@@ -340,6 +402,15 @@ func sameVersion(left *simplestreams.Version, right *simplestreams.Version) bool
 	return true
 }
 
+// sameVersionWithoutEvidence compares only the immutable Incus image artifact set.
+func sameVersionWithoutEvidence(left *simplestreams.Version, right *simplestreams.Version) bool {
+	leftCopy := cloneVersion(left)
+	rightCopy := cloneVersion(right)
+	delete(leftCopy.Items, evidence.ManifestItemName)
+	delete(rightCopy.Items, evidence.ManifestItemName)
+	return sameVersion(leftCopy, rightCopy)
+}
+
 // sameItem compares one rendered Simple Streams item without its private parent link.
 func sameItem(left *simplestreams.Item, right *simplestreams.Item) bool {
 	if left == nil || right == nil {
@@ -428,12 +499,24 @@ func renderMergedDocuments(
 		productName: candidate.productName,
 		versionID:   candidate.versionID,
 		artifacts:   candidate.artifacts,
+		evidence:    candidate.evidence,
 		changed:     true,
 		snapshotKey: snapshotKey,
 		snapshot:    snapshot,
 		indexKey:    indexKey,
 		index:       indexBody,
 	}, nil
+}
+
+// validateIncusProjection applies the closed Incus schema after removing the custom item Incus ignores.
+func validateIncusProjection(productFile *simplestreams.ProductFile) error {
+	incusProjection := cloneProductFile(productFile)
+	for _, product := range incusProjection.Products {
+		for _, version := range product.Versions {
+			delete(version.Items, evidence.ManifestItemName)
+		}
+	}
+	return incusschema.ValidateRuntimeProductFile(incusProjection)
 }
 
 // buildMergedIndex preserves other entries and metadata while replacing only images.

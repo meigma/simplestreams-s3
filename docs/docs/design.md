@@ -19,13 +19,15 @@ the proxy is deliberately an exact-object pipe.
 
 ## Mirror layout
 
-The configured bucket and prefix hold exactly four kinds of keys:
+The configured bucket and prefix hold these key families:
 
 ```text
 streams/v1/index.json
 streams/v1/images-<document-sha256>.json
 images/<metadata-sha256>.incus.tar.xz
 images/<disk-sha256>.qcow2
+images/evidence/<proof-sha256>/<role>
+images/evidence/<manifest-sha256>.evidence-manifest.json
 ```
 
 Artifacts and catalog snapshots are content-addressed and immutable: each key
@@ -38,6 +40,13 @@ never a partial state.
 Checksums are computed from artifact bytes; S3 ETags are never used. Incus
 verifies the published fingerprint, which is the SHA-256 of the metadata
 tarball followed immediately by the disk.
+
+When evidence is supplied, the image version gains one custom
+`evidence-manifest` item. Its document binds the image artifacts and points to
+every content-addressed proof. Incus decodes unknown item types but selects
+only its metadata and root-disk vocabulary for import, so the companion remains
+discoverable to generic Simple Streams consumers without changing the image it
+downloads.
 
 ## Publication
 

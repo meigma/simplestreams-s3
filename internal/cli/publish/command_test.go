@@ -20,18 +20,21 @@ func TestCommandAppliesFlagEnvironmentFileDefaultPrecedence(t *testing.T) {
 	require.NoError(t, os.WriteFile(configPath, []byte("s3:\n  bucket: file-bucket\n"), 0o600))
 	t.Setenv("SIMPLESTREAMS_S3_BUCKET", "environment-bucket")
 	var captured config.Publish
+	var request application.Request
 	command := NewCommand(func(
 		_ context.Context,
 		runtime config.Publish,
-		_ application.Request,
+		publication application.Request,
 	) (application.Result, error) {
 		captured = runtime
+		request = publication
 		return application.Result{}, nil
 	})
 	command.SetArgs([]string{
 		"--config", configPath,
 		"--s3-bucket", "flag-bucket",
 		"--catalog-attempts", "9",
+		"--evidence-manifest", "evidence/evidence-manifest.json",
 		"metadata.tar.xz",
 		"disk.qcow2",
 	})
@@ -41,6 +44,7 @@ func TestCommandAppliesFlagEnvironmentFileDefaultPrecedence(t *testing.T) {
 	assert.Equal(t, config.DefaultS3MaxAttempts, captured.S3.MaxAttempts)
 	assert.Equal(t, config.DefaultPublishTimeout, captured.Timeout)
 	assert.Equal(t, 9, captured.CatalogAttempts)
+	assert.Equal(t, "evidence/evidence-manifest.json", request.EvidenceManifestPath)
 }
 
 // TestCommandLoadsEnvironmentOnlyValuesAndConfigSelector proves explicit env registration unmarshals.

@@ -10,7 +10,8 @@ It provides three commands:
 - `simplestreams-s3 publish METADATA_TARBALL DISK_QCOW2` validates and
   publishes one split VM image. Publication is idempotent and safe under
   concurrent publishers; conflicts fail closed without moving the active
-  catalog.
+  catalog. An optional `attest-vm-image` evidence manifest publishes its
+  content-addressed proofs alongside the image.
 - `simplestreams-s3 proxy` serves exact `GET` and `HEAD` reads with ranges,
   conditions, readiness, JSON logging, graceful draining, and optional OTLP
   metrics.
@@ -70,6 +71,14 @@ invoke the repository directly:
     disk-path: build/disk.qcow2
     s3-bucket: private-images
 ```
+
+The optional manifest input accepts the version-1 handoff emitted by
+[`meigma/attest-vm-image`](https://github.com/meigma/attest-vm-image). The
+publisher requires a passing result, verifies that the handoff binds the exact
+disk and metadata bytes, uploads every proof, and advertises one custom
+`evidence-manifest` item without changing what Incus downloads. See the
+[action guide](action/README.md) for a complete attestation and publication
+workflow.
 
 The moving `v0` tag follows public compatible `v0.x.y` releases. An exact tag
 such as `v0.2.0` selects that repository and CLI release together. For the

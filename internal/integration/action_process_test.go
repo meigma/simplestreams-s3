@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,7 +34,7 @@ func TestGitHubActionPublishesAndRepeats(t *testing.T) {
 	toolCache := t.TempDir()
 	runnerTemp := t.TempDir()
 
-	first := runAction(t, repositoryRoot, toolCache, runnerTemp, metadataPath, diskPath)
+	first := runAction(t, repositoryRoot, toolCache, runnerTemp, metadataPath, diskPath, "")
 	assert.Contains(t, first.log, "Installed simplestreams-s3 0.1.0")
 	assert.Equal(t, actionCLIVersion, first.outputs["cli-version"])
 	assert.Equal(t, "alpinelinux:3.22:cloud:arm64", first.outputs["product"])
@@ -43,12 +44,40 @@ func TestGitHubActionPublishesAndRepeats(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, firstKeys, minIOInitialObjectCount)
 
-	second := runAction(t, repositoryRoot, toolCache, runnerTemp, metadataPath, diskPath)
+	second := runAction(t, repositoryRoot, toolCache, runnerTemp, metadataPath, diskPath, "")
 	assert.Contains(t, second.log, "Using cached simplestreams-s3 0.1.0")
 	assert.Equal(t, first.outputs, second.outputs)
 	secondKeys, err := scenario.objectKeys()
 	require.NoError(t, err)
 	assert.Equal(t, firstKeys, secondKeys)
+}
+
+// TestGitHubActionPublishesEvidence proves the packaged input reaches the current CLI and S3 mirror.
+func TestGitHubActionPublishesEvidence(t *testing.T) {
+	requireActionRuntime(t)
+	scenario := newMinIOScenario(t)
+	directory := t.TempDir()
+	metadataPath, diskPath := testfixture.WriteSplitVM(t, directory, testfixture.DefaultVMOptions())
+	manifestPath := testfixture.WriteEvidenceManifest(
+		t,
+		filepath.Join(directory, "evidence"),
+		metadataPath,
+		diskPath,
+		"pass",
+	)
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err)
+	toolCache := t.TempDir()
+	cacheCurrentCLI(t, repositoryRoot, toolCache)
+
+	result := runAction(t, repositoryRoot, toolCache, t.TempDir(), metadataPath, diskPath, manifestPath)
+	assert.Contains(t, result.log, "Using cached simplestreams-s3 0.1.0")
+	keys, err := scenario.objectKeys()
+	require.NoError(t, err)
+	require.Len(t, keys, 10)
+	assert.True(t, slices.ContainsFunc(keys, func(key string) bool {
+		return strings.HasSuffix(key, ".evidence-manifest.json")
+	}))
 }
 
 // actionResult captures observable runner output from one local action invocation.
@@ -65,6 +94,7 @@ func runAction(
 	runnerTemp string,
 	metadataPath string,
 	diskPath string,
+	evidenceManifestPath string,
 ) actionResult {
 	t.Helper()
 	commandDirectory := t.TempDir()
@@ -91,6 +121,9 @@ func runAction(
 		"INPUT_S3-REGION="+minIORegion,
 		"INPUT_ALIASES=alpinelinux/stable\nalpinelinux/latest",
 	)
+	if evidenceManifestPath != "" {
+		command.Env = append(command.Env, "INPUT_EVIDENCE-MANIFEST-PATH="+evidenceManifestPath)
+	}
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 	commandOutput, err := os.ReadFile(outputPath)
@@ -99,6 +132,22 @@ func runAction(
 		log:     string(output),
 		outputs: parseActionOutputs(t, string(commandOutput)),
 	}
+}
+
+// cacheCurrentCLI builds the implementation branch and installs it in the runner tool-cache shape.
+func cacheCurrentCLI(t testing.TB, repositoryRoot string, toolCache string) {
+	t.Helper()
+	architecture := map[string]string{"amd64": "x64", "arm64": "arm64"}[runtime.GOARCH]
+	require.NotEmpty(t, architecture)
+	directory := filepath.Join(toolCache, "simplestreams-s3", actionCLIVersion, architecture)
+	require.NoError(t, os.MkdirAll(directory, 0o700))
+	binaryPath := filepath.Join(directory, "simplestreams-s3")
+	command := exec.CommandContext(t.Context(), "go", "build", "-o", binaryPath, "./cmd/simplestreams-s3")
+	command.Dir = repositoryRoot
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.NoError(t, os.Chmod(binaryPath, 0o755))
+	require.NoError(t, os.WriteFile(directory+".complete", nil, 0o600))
 }
 
 // parseActionOutputs decodes the multiline GitHub output command-file protocol.

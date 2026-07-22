@@ -66,13 +66,21 @@ func TestIncusAcceptance(t *testing.T) {
 		t.Fatalf("Incus acceptance fixture does not support runner architecture %q", runtime.GOARCH)
 	}
 	metadataPath, diskPath := testfixture.WriteSplitVM(t, t.TempDir(), options)
+	evidenceManifestPath := testfixture.WriteEvidenceManifest(
+		t,
+		t.TempDir(),
+		metadataPath,
+		diskPath,
+		"pass",
+	)
 	vm, err := image.Inspect(metadataPath, diskPath)
 	require.NoError(t, err)
 	expectedFingerprint, err := vm.Fingerprint()
 	require.NoError(t, err)
 	_, err = scenario.publisher.Publish(t.Context(), publish.Request{
-		MetadataPath: metadataPath,
-		DiskPath:     diskPath,
+		MetadataPath:         metadataPath,
+		DiskPath:             diskPath,
+		EvidenceManifestPath: evidenceManifestPath,
 	})
 	require.NoError(t, err)
 

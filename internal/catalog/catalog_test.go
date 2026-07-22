@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,8 +16,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/meigma/simplestreams-s3/internal/evidence"
 	"github.com/meigma/simplestreams-s3/internal/failure"
 	"github.com/meigma/simplestreams-s3/internal/image"
+	"github.com/meigma/simplestreams-s3/internal/object"
 	"github.com/meigma/simplestreams-s3/internal/testfixture"
 )
 
@@ -29,6 +33,44 @@ func (source memorySource) Open(_ context.Context, path simplestreams.RelativePa
 		return nil, simplestreams.ErrNotFound
 	}
 	return io.NopCloser(bytes.NewReader(body)), nil
+}
+
+// TestMergeAddsAndPreservesEvidenceCompanion proves evidence can enrich but never weaken a version.
+func TestMergeAddsAndPreservesEvidenceCompanion(t *testing.T) {
+	t.Parallel()
+	vm := inspectFixtureVM(t, testfixture.DefaultVMOptions())
+	title := mustReleaseTitle(t, "Alpine 3.22")
+	updated := time.Date(2026, 7, 21, 20, 0, 0, 0, time.UTC)
+	plain, err := Render(vm, nil, title, updated)
+	require.NoError(t, err)
+	bundle := writeEvidenceBundle(t, vm, "first")
+
+	enriched, err := MergeWithEvidence(decodeCurrent(t, documentsSource(plain)), vm, nil, title, updated, bundle)
+	require.NoError(t, err)
+	assert.True(t, enriched.Changed())
+	require.NotNil(t, enriched.EvidenceManifest())
+	var productDocument map[string]any
+	require.NoError(t, json.Unmarshal(enriched.Snapshot(), &productDocument))
+	product := requireMap(t, requireMap(t, productDocument, "products"), enriched.ProductName().String())
+	version := requireMap(t, requireMap(t, product, "versions"), enriched.VersionID().String())
+	items := requireMap(t, version, "items")
+	assert.Len(t, items, 3)
+	evidenceItem := requireMap(t, items, evidence.ManifestItemName)
+	assert.Equal(t, evidence.ManifestFileType, evidenceItem["ftype"])
+	assert.Equal(t, enriched.EvidenceManifest().Key().String(), evidenceItem["path"])
+
+	current := decodeCurrent(t, documentsSource(enriched))
+	repeated, err := MergeWithEvidence(current, vm, nil, title, updated.Add(time.Minute), bundle)
+	require.NoError(t, err)
+	assert.False(t, repeated.Changed())
+	withoutEvidence, err := Merge(current, vm, nil, title, updated.Add(2*time.Minute))
+	require.NoError(t, err)
+	assert.False(t, withoutEvidence.Changed())
+
+	differentBundle := writeEvidenceBundle(t, vm, "different")
+	_, err = MergeWithEvidence(current, vm, nil, title, updated.Add(3*time.Minute), differentBundle)
+	require.Error(t, err)
+	assert.Equal(t, failure.KindCatalogConflict, failure.KindOf(err))
 }
 
 // TestRenderCreatesDeterministicTwoItemIncusCatalog proves the Phase 2 wire projection.
@@ -163,6 +205,15 @@ func TestMergeRejectsIncompatibleAdoptedState(t *testing.T) {
 			mergeTitle: title,
 		},
 		{
+			name: "unknown companion item",
+			mutate: func(current *Current) {
+				product := current.ProductFile.Products[first.ProductName().String()]
+				version := product.Versions[first.VersionID().String()]
+				version.Items["unknown"] = cloneItem(version.Items[artifactDiskName])
+			},
+			mergeTitle: title,
+		},
+		{
 			name:       "alias mutation changes product metadata",
 			mutate:     func(_ *Current) {},
 			aliases:    []Alias{mustAlias(t, "alpine/latest/cloud")},
@@ -274,4 +325,46 @@ func mustReleaseTitle(t testing.TB, value string) ReleaseTitle {
 	title, err := NewReleaseTitle(value)
 	require.NoError(t, err)
 	return title
+}
+
+// writeEvidenceBundle constructs one passing handoff whose content varies by salt.
+func writeEvidenceBundle(t testing.TB, vm image.VMImage, salt string) *evidence.Bundle {
+	t.Helper()
+	directory := t.TempDir()
+	roles := []struct {
+		name      string
+		mediaType string
+	}{
+		{"checksums", "text/plain"},
+		{"sbom", "application/spdx+json"},
+		{"vulnerability-report", "application/json"},
+		{"validation-report", "application/json"},
+		{"validation-predicate", "application/vnd.in-toto+json"},
+	}
+	entries := make([]map[string]any, 0, len(roles))
+	for _, role := range roles {
+		body := []byte(role.name + "-" + salt)
+		path := filepath.Join(directory, role.name+".json")
+		require.NoError(t, os.WriteFile(path, body, 0o600))
+		entries = append(entries, map[string]any{
+			"role": role.name, "path": path, "sha256": object.DigestBytes(body).String(), "mediaType": role.mediaType,
+		})
+	}
+	manifest := map[string]any{
+		"schemaVersion": "1",
+		"result":        "pass",
+		"artifacts": map[string]any{
+			"disk":          map[string]any{"path": "disk.qcow2", "sha256": vm.Disk().SHA256().String()},
+			"metadata":      map[string]any{"path": "incus.tar.xz", "sha256": vm.Metadata().SHA256().String()},
+			"buildManifest": nil,
+		},
+		"evidence": entries,
+	}
+	body, err := json.MarshalIndent(manifest, "", "  ")
+	require.NoError(t, err)
+	manifestPath := filepath.Join(directory, "evidence-manifest.json")
+	require.NoError(t, os.WriteFile(manifestPath, body, 0o600))
+	bundle, err := evidence.Inspect(manifestPath, vm)
+	require.NoError(t, err)
+	return bundle
 }

@@ -8,6 +8,12 @@ on:
     paths:
       - action.yml
       - action/**
+      - internal/catalog/**
+      - internal/cli/publish/**
+      - internal/evidence/**
+      - internal/publish/**
+      - internal/testfixture/**
+      - internal/integration/action_process_test.go
       - .github/scripts/update_major_version_tag.sh
       - .github/workflows/action-ci.yml
       - .github/workflows/major-version-tag.yml
@@ -19,6 +25,12 @@ on:
     paths:
       - action.yml
       - action/**
+      - internal/catalog/**
+      - internal/cli/publish/**
+      - internal/evidence/**
+      - internal/publish/**
+      - internal/testfixture/**
+      - internal/integration/action_process_test.go
       - .github/scripts/update_major_version_tag.sh
       - .github/workflows/action-ci.yml
       - .github/workflows/major-version-tag.yml

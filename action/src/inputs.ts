@@ -5,6 +5,7 @@ export interface ActionInputs {
   githubToken?: string
   metadataPath: string
   diskPath: string
+  evidenceManifestPath?: string
   s3Bucket: string
   configFile?: string
   s3Prefix?: string
@@ -29,6 +30,7 @@ export function readActionInputs(): ActionInputs {
     githubToken: optionalInput('github-token'),
     metadataPath: requiredInput('metadata-path'),
     diskPath: requiredInput('disk-path'),
+    evidenceManifestPath: optionalInput('evidence-manifest-path'),
     s3Bucket: requiredInput('s3-bucket'),
     configFile: optionalInput('config-file'),
     s3Prefix: optionalInput('s3-prefix'),

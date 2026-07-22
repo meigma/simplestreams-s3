@@ -15,6 +15,7 @@ import (
 	incusschema "github.com/meigma/go-simplestreams/schema/incus"
 
 	"github.com/meigma/simplestreams-s3/internal/catalog"
+	"github.com/meigma/simplestreams-s3/internal/evidence"
 	"github.com/meigma/simplestreams-s3/internal/failure"
 	"github.com/meigma/simplestreams-s3/internal/image"
 	"github.com/meigma/simplestreams-s3/internal/object"
@@ -75,6 +76,8 @@ type Request struct {
 	MetadataPath string
 	// DiskPath points to the QCOW2 VM disk.
 	DiskPath string
+	// EvidenceManifestPath optionally points to an attest-vm-image version-1 handoff.
+	EvidenceManifestPath string
 	// Aliases contains additional validated Incus aliases.
 	Aliases []catalog.Alias
 	// ReleaseTitle optionally overrides the metadata release value.
@@ -99,10 +102,11 @@ type Options struct {
 
 // preparedPublication contains locally validated inputs reused across CAS attempts.
 type preparedPublication struct {
-	vm      image.VMImage
-	aliases []catalog.Alias
-	title   catalog.ReleaseTitle
-	updated time.Time
+	vm       image.VMImage
+	evidence *evidence.Bundle
+	aliases  []catalog.Alias
+	title    catalog.ReleaseTitle
+	updated  time.Time
 }
 
 // Service publishes one validated VM through an optimistic catalog transaction.
@@ -153,6 +157,13 @@ func (service *Service) prepare(request Request) (preparedPublication, error) {
 	if err != nil {
 		return preparedPublication{}, err
 	}
+	var evidenceBundle *evidence.Bundle
+	if request.EvidenceManifestPath != "" {
+		evidenceBundle, err = evidence.Inspect(request.EvidenceManifestPath, vm)
+		if err != nil {
+			return preparedPublication{}, err
+		}
+	}
 	titleValue := request.ReleaseTitle
 	if titleValue == "" {
 		titleValue = vm.Release().String()
@@ -162,10 +173,11 @@ func (service *Service) prepare(request Request) (preparedPublication, error) {
 		return preparedPublication{}, failure.Wrap(failure.KindInvalidInput, "validate release title", err)
 	}
 	return preparedPublication{
-		vm:      vm,
-		aliases: request.Aliases,
-		title:   title,
-		updated: service.now().UTC(),
+		vm:       vm,
+		evidence: evidenceBundle,
+		aliases:  request.Aliases,
+		title:    title,
+		updated:  service.now().UTC(),
 	}, nil
 }
 
@@ -178,17 +190,21 @@ func (service *Service) publishAttempt(
 	if err != nil {
 		return Result{}, false, err
 	}
-	documents, err := catalog.Merge(
+	documents, err := catalog.MergeWithEvidence(
 		current,
 		prepared.vm,
 		prepared.aliases,
 		prepared.title,
 		prepared.updated,
+		prepared.evidence,
 	)
 	if err != nil {
 		return Result{}, false, err
 	}
 	if err = service.ensureArtifacts(ctx, prepared.vm, documents); err != nil {
+		return Result{}, false, err
+	}
+	if err = service.ensureEvidence(ctx, prepared.evidence); err != nil {
 		return Result{}, false, err
 	}
 	result := publishResult(documents)
@@ -206,6 +222,23 @@ func (service *Service) publishAttempt(
 		return result, false, nil
 	}
 	return Result{}, failure.IsKind(err, failure.KindPrecondition), err
+}
+
+// ensureEvidence creates or verifies every proof before its manifest can become visible.
+func (service *Service) ensureEvidence(ctx context.Context, bundle *evidence.Bundle) error {
+	if bundle == nil {
+		return nil
+	}
+	for _, artifact := range bundle.Objects() {
+		if err := service.ensureImmutable(
+			ctx,
+			evidenceObject(service.prefix.Join(artifact.Key()), artifact),
+		); err != nil {
+			return err
+		}
+	}
+	manifest := bundle.Manifest()
+	return service.ensureImmutable(ctx, evidenceObject(service.prefix.Join(manifest.Key()), manifest))
 }
 
 // publishResult extracts the stable product and version identities from documents.
@@ -430,6 +463,23 @@ func artifactObject(key object.ObjectKey, artifact image.Artifact) CreateObject 
 				return nil, err
 			}
 			return newVerifyingReadCloser(file, artifact.Size(), artifact.SHA256()), nil
+		},
+	}
+}
+
+// evidenceObject maps a validated proof into a verifying create-only write.
+func evidenceObject(key object.ObjectKey, artifact evidence.Artifact) CreateObject {
+	return CreateObject{
+		Key:         key,
+		Size:        artifact.Size(),
+		SHA256:      artifact.SHA256(),
+		ContentType: artifact.ContentType(),
+		Open: func() (io.ReadCloser, error) {
+			reader, err := artifact.Open()
+			if err != nil {
+				return nil, err
+			}
+			return newVerifyingReadCloser(reader, artifact.Size(), artifact.SHA256()), nil
 		},
 	}
 }

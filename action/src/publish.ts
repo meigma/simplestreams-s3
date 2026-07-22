@@ -15,6 +15,7 @@ const optionalFlags: ReadonlyArray<
   ['s3Prefix', '--s3-prefix'],
   ['s3Region', '--s3-region'],
   ['s3ExpectedBucketOwner', '--s3-expected-bucket-owner'],
+  ['evidenceManifestPath', '--evidence-manifest'],
   ['releaseTitle', '--release-title'],
   ['publishTimeout', '--publish-timeout'],
   ['catalogTimeout', '--catalog-timeout'],

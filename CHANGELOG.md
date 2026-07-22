@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.1](https://github.com/meigma/simplestreams-s3/compare/v0.1.0...v0.1.1) (2026-07-22)
+
+
+### Features
+
+* **action:** add publish wrapper ([#20](https://github.com/meigma/simplestreams-s3/issues/20)) ([971dedc](https://github.com/meigma/simplestreams-s3/commit/971dedcbe2060fbaf99154991b51b36ea7bc9e78))
+* **action:** add verified CLI installer ([#18](https://github.com/meigma/simplestreams-s3/issues/18)) ([67b9448](https://github.com/meigma/simplestreams-s3/commit/67b94480ad78de52d5ed6c28c46ede43a27520a6))
+* **action:** unify repository release versioning ([#30](https://github.com/meigma/simplestreams-s3/issues/30)) ([ee9e15a](https://github.com/meigma/simplestreams-s3/commit/ee9e15a7b9c938fe439a1259ad036f406cdbe3d3))
+* publish image attestation evidence ([#33](https://github.com/meigma/simplestreams-s3/issues/33)) ([207c021](https://github.com/meigma/simplestreams-s3/commit/207c021fcc670510167a41b20583c6a0156f960a))
+
+
+### Bug Fixes
+
+* **action:** ignore generated release files ([#29](https://github.com/meigma/simplestreams-s3/issues/29)) ([f489d09](https://github.com/meigma/simplestreams-s3/commit/f489d092b25bdbea9719c03496d3504095253234))
+
 ## 0.1.0 (2026-07-20)
 
 

@@ -86,7 +86,8 @@ content-addressed keys, rewrites runner-local paths to mirror-relative paths,
 then advertises the rewritten document as an `evidence-manifest` item on the
 same product version. Incus ignores that custom item and continues to download
 only the metadata and disk; generic consumers can discover and fetch the full
-proof set from the catalog.
+proof set from the catalog. Image and evidence uploads carry full-object
+CRC-64/NVME checksums, including multipart uploads.
 
 The handoff may be unsigned with no bundles or URL, GitHub-published with all
 three bundles and a non-empty `attestationUrl`, or offline-signed with all three

@@ -255,6 +255,9 @@ func TestPublishMakesEvidenceDiscoverableOnlyAfterEveryProof(t *testing.T) {
 	}
 	manifestKey := store.writes[7]
 	assert.True(t, strings.HasSuffix(manifestKey, ".evidence-manifest.json"))
+	for _, created := range store.created[2:8] {
+		assert.NotNil(t, created.CRC64NVME)
+	}
 	assert.Contains(t, store.writes[8], "streams/v1/images-")
 	assert.Equal(t, "streams/v1/index.json", store.writes[9])
 

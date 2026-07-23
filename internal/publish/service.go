@@ -469,10 +469,12 @@ func artifactObject(key object.ObjectKey, artifact image.Artifact) CreateObject 
 
 // evidenceObject maps a validated proof into a verifying create-only write.
 func evidenceObject(key object.ObjectKey, artifact evidence.Artifact) CreateObject {
+	checksum := artifact.CRC64NVME()
 	return CreateObject{
 		Key:         key,
 		Size:        artifact.Size(),
 		SHA256:      artifact.SHA256(),
+		CRC64NVME:   &checksum,
 		ContentType: artifact.ContentType(),
 		Open: func() (io.ReadCloser, error) {
 			reader, err := artifact.Open()

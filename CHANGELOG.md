@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/meigma/simplestreams-s3/compare/v0.1.1...v0.1.2) (2026-07-23)
+
+
+### Features
+
+* **evidence:** accept offline signed bundles ([#35](https://github.com/meigma/simplestreams-s3/issues/35)) ([b9a604a](https://github.com/meigma/simplestreams-s3/commit/b9a604af98d18e531f2582e4f2a608c33231ea14))
+
 ## [0.1.1](https://github.com/meigma/simplestreams-s3/compare/v0.1.0...v0.1.1) (2026-07-22)
 
 

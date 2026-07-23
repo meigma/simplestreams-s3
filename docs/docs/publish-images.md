@@ -88,6 +88,11 @@ same product version. Incus ignores that custom item and continues to download
 only the metadata and disk; generic consumers can discover and fetch the full
 proof set from the catalog.
 
+The handoff may be unsigned with no bundles or URL, GitHub-published with all
+three bundles and a non-empty `attestationUrl`, or offline-signed with all three
+bundles and no URL. Partial bundle sets, a URL without bundles, and
+present-but-empty URLs fail validation.
+
 Evidence can enrich a previously published version. After enrichment, a plain
 republication preserves the companion, while a different manifest for the same
 product version is rejected as a conflict.

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/meigma/simplestreams-s3/compare/v0.1.3...v0.1.4) (2026-07-23)
+
+
+### Bug Fixes
+
+* **evidence:** use crc64 for multipart uploads ([#39](https://github.com/meigma/simplestreams-s3/issues/39)) ([adf366e](https://github.com/meigma/simplestreams-s3/commit/adf366e227beb54f42f2a5e170ec8a7d659ff63a))
+
 ## [0.1.3](https://github.com/meigma/simplestreams-s3/compare/v0.1.2...v0.1.3) (2026-07-23)
 
 

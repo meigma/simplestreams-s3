@@ -3,9 +3,11 @@ package evidence
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc64"
 	"io"
 	"os"
 	"path/filepath"
@@ -39,6 +41,7 @@ const (
 	mediaTypeOctetStream       = "application/octet-stream"
 	mediaTypeSigstoreBundle    = "application/vnd.dev.sigstore.bundle+json"
 	mediaTypeSigstoreBundleV03 = "application/vnd.dev.sigstore.bundle.v0.3+json"
+	crc64NVMEPoly              = 0x9a6c_9329_ac4b_c9b5
 )
 
 // Artifact is one immutable evidence object prepared for mirror publication.
@@ -49,6 +52,7 @@ type Artifact struct {
 	key         object.ObjectKey
 	size        object.ByteSize
 	sha256      object.SHA256Digest
+	crc64       object.CRC64NVME
 	contentType string
 }
 
@@ -376,13 +380,23 @@ func inspectFile(
 	if err != nil {
 		return Artifact{}, failure.Wrap(failure.KindInvalidInput, "open evidence file", err)
 	}
-	digest, size, digestErr := object.DigestReader(file)
+	shaHasher := sha256.New()
+	crcHasher := crc64.New(crc64.MakeTable(crc64NVMEPoly))
+	written, digestErr := io.Copy(io.MultiWriter(shaHasher, crcHasher), file)
 	closeErr := file.Close()
 	if digestErr != nil {
 		return Artifact{}, failure.Wrap(failure.KindInvalidInput, "hash evidence file", digestErr)
 	}
 	if closeErr != nil {
 		return Artifact{}, failure.Wrap(failure.KindInvalidInput, "close evidence file", closeErr)
+	}
+	digest, err := object.NewSHA256Digest(shaHasher.Sum(nil))
+	if err != nil {
+		return Artifact{}, failure.Wrap(failure.KindInternal, "record evidence digest", err)
+	}
+	size, err := object.NewByteSize(written)
+	if err != nil {
+		return Artifact{}, failure.Wrap(failure.KindInternal, "record evidence size", err)
 	}
 	if err = matchDigest(role, digestText, digest); err != nil {
 		return Artifact{}, err
@@ -392,13 +406,15 @@ func inspectFile(
 		return Artifact{}, failure.Wrap(failure.KindInternal, "derive evidence key", err)
 	}
 	return Artifact{
-		role: role, path: resolved, key: key, size: size, sha256: digest, contentType: contentType,
+		role: role, path: resolved, key: key, size: size, sha256: digest,
+		crc64: object.NewCRC64NVME(crcHasher.Sum64()), contentType: contentType,
 	}, nil
 }
 
 // bytesArtifact prepares one in-memory rendered document for immutable publication.
 func bytesArtifact(role string, body []byte, contentType string, suffix string) (Artifact, error) {
 	digest := object.DigestBytes(body)
+	checksum := object.NewCRC64NVME(crc64.Checksum(body, crc64.MakeTable(crc64NVMEPoly)))
 	size, err := object.NewByteSize(int64(len(body)))
 	if err != nil {
 		return Artifact{}, failure.Wrap(failure.KindInternal, "size evidence manifest", err)
@@ -407,7 +423,9 @@ func bytesArtifact(role string, body []byte, contentType string, suffix string) 
 	if err != nil {
 		return Artifact{}, failure.Wrap(failure.KindInternal, "derive evidence manifest key", err)
 	}
-	return Artifact{role: role, body: body, key: key, size: size, sha256: digest, contentType: contentType}, nil
+	return Artifact{
+		role: role, body: body, key: key, size: size, sha256: digest, crc64: checksum, contentType: contentType,
+	}, nil
 }
 
 // matchDigest requires a canonical lowercase digest equal to expected.
@@ -456,6 +474,9 @@ func (artifact Artifact) Size() object.ByteSize { return artifact.size }
 
 // SHA256 returns the exact object digest.
 func (artifact Artifact) SHA256() object.SHA256Digest { return artifact.sha256 }
+
+// CRC64NVME returns the full-object S3 checksum.
+func (artifact Artifact) CRC64NVME() object.CRC64NVME { return artifact.crc64 }
 
 // ContentType returns the stable HTTP media type.
 func (artifact Artifact) ContentType() string { return artifact.contentType }

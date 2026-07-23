@@ -34,6 +34,7 @@ const (
 	roleProvenanceAttestation = "provenance-attestation"
 	roleSBOMAttestation       = "sbom-attestation"
 	roleValidationAttestation = "validation-attestation"
+	signedEvidenceRoleCount   = 3
 	mediaTypeJSON             = "application/json"
 	mediaTypeOctetStream      = "application/octet-stream"
 	mediaTypeSigstoreBundle   = "application/vnd.dev.sigstore.bundle+json"
@@ -185,7 +186,7 @@ func Inspect(manifestPath string, vm image.VMImage) (*Bundle, error) {
 	return &Bundle{objects: objects, manifest: manifest}, nil
 }
 
-// validateSigningSet requires signed handoffs to carry all three bundles and their URL.
+// validateSigningSet accepts unsigned evidence or a complete three-bundle signing set.
 func validateSigningSet(sources []sourceEvidence, attestationURL *string) error {
 	signedCount := 0
 	for _, source := range sources {
@@ -194,11 +195,17 @@ func validateSigningSet(sources []sourceEvidence, attestationURL *string) error 
 			signedCount++
 		}
 	}
+	if attestationURL != nil && *attestationURL == "" {
+		return invalid("evidence attestation URL must not be empty")
+	}
 	if signedCount == 0 && attestationURL == nil {
 		return nil
 	}
-	if signedCount != 3 || attestationURL == nil || *attestationURL == "" {
-		return invalid("signed evidence must include all three bundles and an attestation URL")
+	if signedCount == 0 {
+		return invalid("evidence attestation URL requires all three bundles")
+	}
+	if signedCount != signedEvidenceRoleCount {
+		return invalid("signed evidence must include all three bundles")
 	}
 	return nil
 }

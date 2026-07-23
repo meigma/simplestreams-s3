@@ -57,7 +57,7 @@ steps:
   # Build build/incus.tar.xz and build/disk.qcow2 here.
 
   - id: attest
-    uses: meigma/attest-vm-image@2646b5c7b0afc58f20a821ab44a5d0780733bd79 # v1.1.0
+    uses: meigma/attest-vm-image@74df230b1d6ab5c109379c7df23c7c518682ee4f # v1.2.0
     with:
       disk-path: build/disk.qcow2
       metadata-path: build/incus.tar.xz
@@ -81,6 +81,11 @@ steps:
 action rejects any supplied manifest whose result is not `pass`, whose disk or
 metadata digest differs from the image, or whose proof files no longer match
 their declared digests.
+
+The handoff may be unsigned with no bundles or URL, GitHub-published with all
+three bundles and a non-empty `attestationUrl`, or offline-signed with all three
+bundles and no URL. Partial bundle sets, a URL without bundles, and
+present-but-empty URLs are rejected.
 
 The moving `v0` tag selects the newest public compatible `v0.x.y` repository
 release. Use an exact tag such as `v0.2.0` to select the action and CLI release

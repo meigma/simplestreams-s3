@@ -124,17 +124,98 @@ func TestInspectRejectsUnpublishableHandoffs(t *testing.T) {
 	}
 }
 
-// TestInspectRejectsPartialSignedEvidence proves a signed handoff cannot omit one bundle.
-func TestInspectRejectsPartialSignedEvidence(t *testing.T) {
+// TestInspectAcceptsSupportedSigningSets proves unsigned, hosted, and offline evidence compose.
+func TestInspectAcceptsSupportedSigningSets(t *testing.T) {
 	t.Parallel()
-	manifestPath, vm := writePassingManifest(t, true)
-	manifest := readSourceManifest(t, manifestPath)
-	manifest.Evidence = manifest.Evidence[:len(manifest.Evidence)-1]
-	writeSourceManifest(t, manifestPath, manifest)
+	tests := []struct {
+		name            string
+		includeBundles  bool
+		removeURL       bool
+		expectedURL     bool
+		expectedObjects int
+	}{
+		{name: "unsigned", expectedObjects: 5},
+		{name: "GitHub published", includeBundles: true, expectedURL: true, expectedObjects: 9},
+		{name: "offline signed", includeBundles: true, removeURL: true, expectedObjects: 9},
+	}
 
-	_, err := Inspect(manifestPath, vm)
-	require.Error(t, err)
-	assert.Equal(t, failure.KindInvalidInput, failure.KindOf(err))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			manifestPath, vm := writePassingManifest(t, test.includeBundles)
+			if test.removeURL {
+				manifest := readSourceManifest(t, manifestPath)
+				manifest.AttestationURL = nil
+				writeSourceManifest(t, manifestPath, manifest)
+			}
+
+			bundle, err := Inspect(manifestPath, vm)
+			require.NoError(t, err)
+			assert.Len(t, bundle.Objects(), test.expectedObjects)
+			var published publishedManifest
+			require.NoError(t, json.Unmarshal(readArtifact(t, bundle.Manifest()), &published))
+			if test.expectedURL {
+				assert.NotNil(t, published.AttestationURL)
+			} else {
+				assert.Nil(t, published.AttestationURL)
+			}
+		})
+	}
+}
+
+// TestInspectRejectsInvalidSigningSets proves partial bundles and malformed URLs fail closed.
+func TestInspectRejectsInvalidSigningSets(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name           string
+		includeBundles bool
+		mutate         func(*sourceManifest)
+	}{
+		{
+			name:           "partial bundle set",
+			includeBundles: true,
+			mutate: func(manifest *sourceManifest) {
+				manifest.Evidence = manifest.Evidence[:len(manifest.Evidence)-1]
+				manifest.AttestationURL = nil
+			},
+		},
+		{
+			name:           "empty URL with complete bundles",
+			includeBundles: true,
+			mutate: func(manifest *sourceManifest) {
+				empty := ""
+				manifest.AttestationURL = &empty
+			},
+		},
+		{
+			name: "URL without bundles",
+			mutate: func(manifest *sourceManifest) {
+				url := "https://github.com/meigma/example/attestations/1"
+				manifest.AttestationURL = &url
+			},
+		},
+		{
+			name: "empty URL without bundles",
+			mutate: func(manifest *sourceManifest) {
+				empty := ""
+				manifest.AttestationURL = &empty
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			manifestPath, vm := writePassingManifest(t, test.includeBundles)
+			manifest := readSourceManifest(t, manifestPath)
+			test.mutate(&manifest)
+			writeSourceManifest(t, manifestPath, manifest)
+
+			_, err := Inspect(manifestPath, vm)
+			require.Error(t, err)
+			assert.Equal(t, failure.KindInvalidInput, failure.KindOf(err))
+		})
+	}
 }
 
 // writePassingManifest constructs one complete version-1 handoff fixture.

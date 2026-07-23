@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/meigma/simplestreams-s3/compare/v0.1.2...v0.1.3) (2026-07-23)
+
+
+### Bug Fixes
+
+* **evidence:** accept Sigstore bundle v0.3 media type ([#37](https://github.com/meigma/simplestreams-s3/issues/37)) ([8db5a8d](https://github.com/meigma/simplestreams-s3/commit/8db5a8de73d3ef7c8d3ecbcf19b3a2fddff17544))
+
 ## [0.1.2](https://github.com/meigma/simplestreams-s3/compare/v0.1.1...v0.1.2) (2026-07-23)
 
 

@@ -23,21 +23,22 @@ const (
 	// ManifestFileType is the intentionally custom Simple Streams item vocabulary.
 	ManifestFileType = "evidence-manifest"
 	// ManifestMediaType is the HTTP content type of the published version-1 handoff.
-	ManifestMediaType         = "application/vnd.meigma.vm-image-evidence-manifest.v1+json"
-	maxManifestBytes          = int64(1 << 20)
-	resultPass                = "pass"
-	roleChecksums             = "checksums"
-	roleSBOM                  = "sbom"
-	roleVulnerabilityReport   = "vulnerability-report"
-	roleValidationReport      = "validation-report"
-	roleValidationPredicate   = "validation-predicate"
-	roleProvenanceAttestation = "provenance-attestation"
-	roleSBOMAttestation       = "sbom-attestation"
-	roleValidationAttestation = "validation-attestation"
-	signedEvidenceRoleCount   = 3
-	mediaTypeJSON             = "application/json"
-	mediaTypeOctetStream      = "application/octet-stream"
-	mediaTypeSigstoreBundle   = "application/vnd.dev.sigstore.bundle+json"
+	ManifestMediaType          = "application/vnd.meigma.vm-image-evidence-manifest.v1+json"
+	maxManifestBytes           = int64(1 << 20)
+	resultPass                 = "pass"
+	roleChecksums              = "checksums"
+	roleSBOM                   = "sbom"
+	roleVulnerabilityReport    = "vulnerability-report"
+	roleValidationReport       = "validation-report"
+	roleValidationPredicate    = "validation-predicate"
+	roleProvenanceAttestation  = "provenance-attestation"
+	roleSBOMAttestation        = "sbom-attestation"
+	roleValidationAttestation  = "validation-attestation"
+	signedEvidenceRoleCount    = 3
+	mediaTypeJSON              = "application/json"
+	mediaTypeOctetStream       = "application/octet-stream"
+	mediaTypeSigstoreBundle    = "application/vnd.dev.sigstore.bundle+json"
+	mediaTypeSigstoreBundleV03 = "application/vnd.dev.sigstore.bundle.v0.3+json"
 )
 
 // Artifact is one immutable evidence object prepared for mirror publication.
@@ -342,7 +343,7 @@ func allowedMediaTypes(role string) []string {
 	case roleValidationPredicate:
 		return []string{"application/vnd.in-toto+json"}
 	case roleProvenanceAttestation, roleSBOMAttestation, roleValidationAttestation:
-		return []string{mediaTypeSigstoreBundle}
+		return []string{mediaTypeSigstoreBundle, mediaTypeSigstoreBundleV03}
 	default:
 		return nil
 	}

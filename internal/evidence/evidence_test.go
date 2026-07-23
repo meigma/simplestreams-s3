@@ -242,9 +242,9 @@ func writePassingManifest(t testing.TB, includeOptional bool) (string, image.VMI
 	}
 	if includeOptional {
 		sources = append(sources,
-			sourceSpec{"provenance-attestation", "application/vnd.dev.sigstore.bundle+json"},
-			sourceSpec{"sbom-attestation", "application/vnd.dev.sigstore.bundle+json"},
-			sourceSpec{"validation-attestation", "application/vnd.dev.sigstore.bundle+json"},
+			sourceSpec{"provenance-attestation", mediaTypeSigstoreBundleV03},
+			sourceSpec{"sbom-attestation", mediaTypeSigstoreBundleV03},
+			sourceSpec{"validation-attestation", mediaTypeSigstoreBundleV03},
 		)
 	}
 	evidenceEntries := make([]sourceEvidence, 0, len(sources))
